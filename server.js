@@ -1,1 +1,135 @@
-const express=require("express"),cors=require("cors"),cron=require("node-cron"),Database=require("better-sqlite3"),axios=require("axios");require("dotenv").config();const app=express(),PORT=process.env.PORT||3000;app.use(cors());app.use(express.json());const db=new Database("reminders.db");db.exec(`CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,userId TEXT NOT NULL,nextDate TEXT NOT NULL,productDays INTEGER NOT NULL,productName TEXT DEFAULT'',notified INTEGER DEFAULT 0,createdAt TEXT DEFAULT(datetime('now','+8 hours')))`);db.exec(`CREATE TABLE IF NOT EXISTS registrations(id INTEGER PRIMARY KEY AUTOINCREMENT,userId TEXT NOT NULL,productName TEXT NOT NULL,productCode TEXT NOT NULL,purchaseDate TEXT NOT NULL,purchasePlace TEXT NOT NULL,warrantyEnd TEXT NOT NULL,createdAt TEXT DEFAULT(datetime('now','+8 hours')))`);try{db.exec("ALTER TABLE reminders ADD COLUMN productName TEXT DEFAULT''")}catch(e){}console.log("DB ready");const LINE_CHANNEL_ID=process.env.LINE_CHANNEL_ID,LINE_CHANNEL_SECRET=process.env.LINE_CHANNEL_SECRET,LINE_API="https://api.line.me/v2/bot/message/push",ADMIN_KEY=process.env.ADMIN_KEY||"kida-admin-2024";async function getLineToken(){const r=await axios.post("https://api.line.me/oauth2/v3/token",`grant_type=client_credentials&client_id=${LINE_CHANNEL_ID}&client_secret=${LINE_CHANNEL_SECRET}`,{headers:{"Content-Type":"application/x-www-form-urlencoded"}});return r.data.access_token}function buildFlexMessage(productName,daysLeft,type){let headerColor,emoji,title,body;if(type==="3days"){headerColor="#E67E22";emoji="⏰";title="濾心即將到期提醒";body=`您的【${productName}】濾心還有 3 天到期，請提前準備新濾心！`}else if(type==="today"){headerColor="#E74C3C";emoji="🚨";title="今日請更換濾心！";body=`您的【${productName}】濾心今天到期，為確保水質安全，請立即更換。`}else if(type==="overdue"){headerColor="#C0392B";emoji="⚠️";title="濾心已逾期！";body=`您的【${productName}】濾心已逾期 1 天，請儘速更換，避免影響過濾效果。`}else{headerColor="#2980B9";emoji="💧";title="濾心補充提醒";body=`您的【${productName}】濾心到期日即將到來，需要補充濾心嗎？`}return{type:"flex",altText:`${emoji} ${title}`,contents:{type:"bubble",size:"mega",header:{type:"box",layout:"vertical",contents:[{type:"text",text:`${emoji} ${title}`,weight:"bold",size:"lg",color:"#FFFFFF"}],backgroundColor:headerColor,paddingAll:"16px"},body:{type:"box",layout:"vertical",contents:[{type:"text",text:body,wrap:true,size:"md",color:"#333333",margin:"none"},{type:"separator",margin:"lg"},{type:"box",layout:"horizontal",margin:"lg",contents:[{type:"text",text:"產品",size:"sm",color:"#888888",flex:2},{type:"text",text:productName,size:"sm",color:"#333333",flex:4,weight:"bold",wrap:true}]},{type:"box",layout:"horizontal",margin:"sm",contents:[{type:"text",text:"客服電話",size:"sm",color:"#888888",flex:2},{type:"text",text:"02-2756-5899",size:"sm",color:"#333333",flex:4}]}],paddingAll:"16px"},footer:{type:"box",layout:"vertical",spacing:"sm",contents:[{type:"button",style:"primary",color:"#0078A0",action:{type:"uri",label:"🛒 前往購買濾心",uri:"https://www.kida.tw/"},height:"sm"},{type:"button",style:"secondary",action:{type:"uri",label:"💬 聯絡客服",uri:"https://line.me/R/ti/p/@kida888"},height:"sm"}],paddingAll:"12px"}}}}async function sendFlexMessage(userId,productName,daysLeft,type){try{const token=await getLineToken();await axios.post(LINE_API,{to:userId,messages:[buildFlexMessage(productName,daysLeft,type)]},{headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`}});console.log("sent:"+userId.substring(0,10));return true}catch(e){console.error("fail",e.response?.data||e.message);return false}}app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中 💧"}));app.post("/api/reminder",(req,res)=>{const{userId,nextDate,productDays,productName}=req.body;if(!userId||!nextDate||!productDays)return res.status(400).json({error:"missing fields"});try{const e=db.prepare("SELECT id FROM reminders WHERE userId=?").get(userId),name=productName||"";e?db.prepare("UPDATE reminders SET nextDate=?,productDays=?,productName=?,notified=0 WHERE userId=?").run(nextDate,productDays,name,userId):db.prepare("INSERT INTO reminders(userId,nextDate,productDays,productName)VALUES(?,?,?,?)").run(userId,nextDate,productDays,name);res.json({success:true})}catch(e){res.status(500).json({error:"server error"})}});app.get("/api/reminder/:userId",(req,res)=>res.json(db.prepare("SELECT * FROM reminders WHERE userId=?").get(req.params.userId)||{}));app.post("/api/register",(req,res)=>{const{userId,productName,productCode,purchaseDate,purchasePlace}=req.body;if(!userId||!productName||!productCode||!purchaseDate||!purchasePlace)return res.status(400).json({error:"missing fields"});try{const d=new Date(purchaseDate);d.setFullYear(d.getFullYear()+1);const warrantyEnd=d.toISOString().split("T")[0];db.prepare("INSERT INTO registrations(userId,productName,productCode,purchaseDate,purchasePlace,warrantyEnd)VALUES(?,?,?,?,?,?)").run(userId,productName,productCode,purchaseDate,purchasePlace,warrantyEnd);res.json({success:true,warrantyEnd})}catch(e){res.status(500).json({error:"server error"})}});app.get("/api/registrations/:userId",(req,res)=>res.json(db.prepare("SELECT * FROM registrations WHERE userId=? ORDER BY createdAt DESC").all(req.params.userId)));function checkAdmin(req,res){const key=req.headers["x-admin-key"]||req.query.key;if(key!==ADMIN_KEY){res.status(401).json({error:"未授權"});return false}return true}app.get("/api/admin/reminders",(req,res)=>{if(!checkAdmin(req,res))return;const rows=db.prepare("SELECT * FROM reminders ORDER BY nextDate ASC").all(),today=new Date();today.setHours(0,0,0,0);res.json(rows.map(r=>{const d=new Date(r.nextDate);d.setHours(0,0,0,0);return{...r,daysLeft:Math.round((d-today)/86400000)}}))});app.get("/api/admin/registrations",(req,res)=>{if(!checkAdmin(req,res))return;const rows=db.prepare("SELECT * FROM registrations ORDER BY createdAt DESC").all(),today=new Date();today.setHours(0,0,0,0);res.json(rows.map(r=>{const d=new Date(r.warrantyEnd);d.setHours(0,0,0,0);return{...r,warrantyDaysLeft:Math.round((d-today)/86400000)}}))});app.post("/api/admin/push",async(req,res)=>{if(!checkAdmin(req,res))return;const{userId,productName,message}=req.body;if(!userId)return res.status(400).json({error:"缺少 userId"});try{const token=await getLineToken(),messages=message?[{type:"text",text:message}]:[buildFlexMessage(productName||"可菱水濾心",null,"manual")];await axios.post(LINE_API,{to:userId,messages},{headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`}});res.json({success:true,message:"推播成功"})}catch(error){res.status(500).json({error:"推播失敗",detail:error.response?.data||error.message})}});app.get("/api/admin/stats",(req,res)=>{if(!checkAdmin(req,res))return;res.json({totalReminders:db.prepare("SELECT COUNT(*) as c FROM reminders").get().c,totalRegistrations:db.prepare("SELECT COUNT(*) as c FROM registrations").get().c,urgentCount:db.prepare("SELECT COUNT(*) as c FROM reminders WHERE nextDate <= date('now','+5 days','+8 hours')").get().c,overdueCount:db.prepare("SELECT COUNT(*) as c FROM reminders WHERE nextDate < date('now','+8 hours')").get().c})});function daysDiff(dateStr){const today=new Date(),target=new Date(dateStr);today.setHours(0,0,0,0);target.setHours(0,0,0,0);return Math.round((target-today)/86400000)}cron.schedule("0 9 * * *",async()=>{const rows=db.prepare("SELECT * FROM reminders WHERE notified=0").all();for(const r of rows){const d=daysDiff(r.nextDate),pName=r.productName||"可菱水濾心";if(d===3)await sendFlexMessage(r.userId,pName,3,"3days");if(d===0){await sendFlexMessage(r.userId,pName,0,"today");db.prepare("UPDATE reminders SET notified=1 WHERE id=?").run(r.id)}if(d===-1){await sendFlexMessage(r.userId,pName,-1,"overdue");db.prepare("UPDATE reminders SET notified=1 WHERE id=?").run(r.id)}}},{timezone:"Asia/Taipei"});cron.schedule("5 9 * * *",async()=>{const rows=db.prepare("SELECT * FROM registrations").all();for(const r of rows){const d=daysDiff(r.warrantyEnd);if(d===30||d===7){try{const token=await getLineToken();await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:`📋 【保固到期提醒】\n\n您的【${r.productName}】\n保固到期日：${r.warrantyEnd}\n還有 ${d} 天到期。\n\n如需諮詢，歡迎聯繫客服！\n📞 02-2756-5899`}]},{headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`}})}catch(e){console.error("保固提醒失敗",e.response?.data||e.message)}}}},{timezone:"Asia/Taipei"});app.listen(PORT,()=>console.log(`🚀 伺服器啟動於 port ${PORT}`));
+const express=require("express"),cors=require("cors"),cron=require("node-cron"),axios=require("axios");require("dotenv").config();
+const app=express(),PORT=process.env.PORT||3000;
+app.use(cors());app.use(express.json());
+
+// Supabase 設定（永久資料庫，不會因重啟消失）
+const SUPA_URL=process.env.SUPABASE_URL||"https://dipfeatcxmjavrgzggva.supabase.co";
+const SUPA_KEY=process.env.SUPABASE_SERVICE_KEY||"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpcGZlYXRjeG1qYXZyZ3pnZ3ZhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjA2MDQwOSwiZXhwIjoyMDkxNjM2NDA5fQ.ul5sFX5qpQwV5cNjCTSJQ53aL4Xso0bVhcNsDMAIygc";
+const SUPA_HEADERS={"Content-Type":"application/json","apikey":SUPA_KEY,"Authorization":"Bearer "+SUPA_KEY,"Prefer":"return=representation"};
+
+async function dbGet(table,query=""){const r=await axios.get(SUPA_URL+"/rest/v1/"+table+query,{headers:SUPA_HEADERS});return r.data}
+async function dbPost(table,body){const r=await axios.post(SUPA_URL+"/rest/v1/"+table,body,{headers:SUPA_HEADERS});return r.data}
+async function dbPatch(table,query,body){const r=await axios.patch(SUPA_URL+"/rest/v1/"+table+query,body,{headers:{...SUPA_HEADERS,"Prefer":"return=minimal"}});return r.status}
+async function dbDelete(table,query){const r=await axios.delete(SUPA_URL+"/rest/v1/"+table+query,{headers:SUPA_HEADERS});return r.status}
+
+const LINE_CHANNEL_ID=process.env.LINE_CHANNEL_ID;
+const LINE_CHANNEL_SECRET=process.env.LINE_CHANNEL_SECRET;
+const LINE_API="https://api.line.me/v2/bot/message/push";
+const ADMIN_KEY=process.env.ADMIN_KEY||"kida-admin-2024";
+
+console.log("🚀 KIDA 可菱水提醒系統 - Supabase 模式啟動");
+
+app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中 💧",db:"Supabase (永久儲存)"}));
+
+// 濾心提醒 - 設定
+app.post("/api/reminder",async(req,res)=>{
+  const{userId,nextDate,productDays,productName}=req.body;
+  if(!userId||!nextDate||!productDays)return res.status(400).json({error:"missing fields"});
+  try{
+    const existing=await dbGet("reminders","?userId=eq."+userId);
+    if(existing&&existing.length>0){
+      await dbPatch("reminders","?userId=eq."+userId,{nextDate,productDays:parseInt(productDays),productName:productName||"",notified:0});
+    }else{
+      await dbPost("reminders",{userId,nextDate,productDays:parseInt(productDays),productName:productName||"",notified:0});
+    }
+    res.json({success:true});
+  }catch(e){console.error("reminder error",e.response?.data||e.message);res.status(500).json({error:"server error"})}
+});
+
+// 查詢個人提醒
+app.get("/api/reminder/:userId",async(req,res)=>{
+  try{const r=await dbGet("reminders","?userId=eq."+req.params.userId);res.json(r[0]||{})}catch(e){res.status(500).json({error:"server error"})}
+});
+
+// 產品保固登錄
+app.post("/api/register",async(req,res)=>{
+  const{userId,productName,productCode,purchaseDate,purchasePlace}=req.body;
+  if(!userId||!productName||!productCode||!purchaseDate||!purchasePlace)return res.status(400).json({error:"missing fields"});
+  try{
+    const d=new Date(purchaseDate);d.setFullYear(d.getFullYear()+1);
+    const warrantyEnd=d.toISOString().split("T")[0];
+    await dbPost("registrations",{userId,productName,productCode,purchaseDate,purchasePlace,warrantyEnd});
+    res.json({success:true,warrantyEnd});
+  }catch(e){console.error("register error",e.response?.data||e.message);res.status(500).json({error:"server error"})}
+});
+
+// Admin API
+function checkAdmin(req,res){const key=req.headers["x-admin-key"]||req.query.key;if(key!==ADMIN_KEY){res.status(401).json({error:"未授權"});return false}return true}
+
+app.get("/api/admin/reminders",async(req,res)=>{
+  if(!checkAdmin(req,res))return;
+  try{
+    const rows=await dbGet("reminders","?order=nextDate.asc");
+    const today=new Date();today.setHours(0,0,0,0);
+    res.json(rows.map(r=>{const d=new Date(r.nextDate);d.setHours(0,0,0,0);return{...r,daysLeft:Math.round((d-today)/86400000)}}));
+  }catch(e){res.status(500).json({error:e.message})}
+});
+
+app.get("/api/admin/registrations",async(req,res)=>{
+  if(!checkAdmin(req,res))return;
+  try{
+    const rows=await dbGet("registrations","?order=createdAt.desc");
+    const today=new Date();today.setHours(0,0,0,0);
+    res.json(rows.map(r=>{const d=new Date(r.warrantyEnd);d.setHours(0,0,0,0);return{...r,warrantyDaysLeft:Math.round((d-today)/86400000)}}));
+  }catch(e){res.status(500).json({error:e.message})}
+});
+
+app.get("/api/admin/stats",async(req,res)=>{
+  if(!checkAdmin(req,res))return;
+  try{
+    const reminders=await dbGet("reminders","?select=count");
+    const regs=await dbGet("registrations","?select=count");
+    res.json({totalReminders:reminders.length,totalRegistrations:regs.length});
+  }catch(e){res.status(500).json({error:e.message})}
+});
+
+// LINE 推播
+async function getLineToken(){const r=await axios.post("https://api.line.me/oauth2/v3/token",`grant_type=client_credentials&client_id=${LINE_CHANNEL_ID}&client_secret=${LINE_CHANNEL_SECRET}`,{headers:{"Content-Type":"application/x-www-form-urlencoded"}});return r.data.access_token}
+
+async function sendMsg(userId,productName,type){
+  try{
+    const token=await getLineToken();
+    let text;
+    if(type==="3days")text=`⏰ 【三菱可菱水 濾心更換提醒】\n\n濾心型號：${productName}\n到期日還有 3 天！\n\n請提前準備好新濾心，確保飲水健康 💧\n\n購買濾心：https://www.kida.tw/`;
+    else if(type==="today")text=`🚨 【今天請更換濾心！】\n\n濾心型號：${productName}\n\n今天是您的濾心到期日，請立即換上新濾心！\n換完後請重新設定下次提醒 💧\n\n購買濾心：https://www.kida.tw/`;
+    else text=`⚠️ 您的【${productName}】濾心已逾期，請盡快更換！\n換完後記得重新設定提醒。\n\n📞 客服：02-2756-5899`;
+    await axios.post(LINE_API,{to:userId,messages:[{type:"text",text}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
+    console.log("✅ 推播成功:",userId.substring(0,10));
+  }catch(e){console.error("推播失敗",e.response?.data||e.message)}
+}
+
+function daysDiff(d){const t=new Date,g=new Date(d);t.setHours(0,0,0,0);g.setHours(0,0,0,0);return Math.round((g-t)/86400000)}
+
+// 每天 09:00 濾心提醒
+cron.schedule("0 9 * * *",async()=>{
+  console.log("⏰ 開始執行濾心提醒...");
+  try{
+    const rows=await dbGet("reminders","?notified=eq.0");
+    for(const r of rows){
+      const d=daysDiff(r.nextDate);
+      const name=r.productName||"可菱水濾心";
+      if(d===3)await sendMsg(r.userId,name,"3days");
+      if(d===0){await sendMsg(r.userId,name,"today");await dbPatch("reminders","?userId=eq."+r.userId,{notified:1})}
+      if(d===-1){await sendMsg(r.userId,name,"overdue");await dbPatch("reminders","?userId=eq."+r.userId,{notified:1})}
+    }
+    console.log("✅ 濾心提醒完成，共",rows.length,"筆");
+  }catch(e){console.error("提醒失敗",e.message)}
+},{timezone:"Asia/Taipei"});
+
+// 每天 09:05 保固提醒
+cron.schedule("5 9 * * *",async()=>{
+  try{
+    const rows=await dbGet("registrations","");
+    for(const r of rows){
+      const d=daysDiff(r.warrantyEnd);
+      if(d===30||d===7){
+        try{
+          const token=await getLineToken();
+          await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:`📋 【保固到期提醒】\n\n您的【${r.productName}】\n保固到期日：${r.warrantyEnd}\n還有 ${d} 天到期。\n\n如需諮詢請聯繫客服：\n📞 02-2756-5899`}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
+        }catch(e){console.error("保固提醒失敗",e.response?.data||e.message)}
+      }
+    }
+  }catch(e){console.error("保固提醒錯誤",e.message)}
+},{timezone:"Asia/Taipei"});
+
+app.listen(PORT,()=>console.log(`🚀 伺服器啟動 port ${PORT} - Supabase 永久儲存模式`));
