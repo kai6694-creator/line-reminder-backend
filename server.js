@@ -4,16 +4,18 @@ app.use(cors());app.use(express.json());
 
 const SUPA_URL=process.env.SUPABASE_URL||"https://dipfeatcxmjavrgzggva.supabase.co";
 const SUPA_KEY=process.env.SUPABASE_SERVICE_KEY||"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpcGZlYXRjeG1qYXZyZ3pnZ3ZhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjA2MDQwOSwiZXhwIjoyMDkxNjM2NDA5fQ.ul5sFX5qpQwV5cNjCTSJQ53aL4Xso0bVhcNsDMAIygc";
-const SUPA_HEADERS={"Content-Type":"application/json","apikey":SUPA_KEY,"Authorization":"Bearer "+SUPA_KEY,"Prefer":"return=representation"};
+const SUPA_H={"Content-Type":"application/json","apikey":SUPA_KEY,"Authorization":"Bearer "+SUPA_KEY,"Prefer":"return=representation"};
 
-async function dbGet(table,query=""){const r=await axios.get(SUPA_URL+"/rest/v1/"+table+query,{headers:SUPA_HEADERS});return r.data}
-async function dbPost(table,body){const r=await axios.post(SUPA_URL+"/rest/v1/"+table,body,{headers:SUPA_HEADERS});return r.data}
-async function dbPatch(table,query,body){const r=await axios.patch(SUPA_URL+"/rest/v1/"+table+query,body,{headers:{...SUPA_HEADERS,"Prefer":"return=minimal"}});return r.status}
+async function dbGet(t,q=""){const r=await axios.get(SUPA_URL+"/rest/v1/"+t+q,{headers:SUPA_H});return r.data}
+async function dbPost(t,b){const r=await axios.post(SUPA_URL+"/rest/v1/"+t,b,{headers:SUPA_H});return r.data}
+async function dbPatch(t,q,b){const r=await axios.patch(SUPA_URL+"/rest/v1/"+t+q,b,{headers:{...SUPA_H,"Prefer":"return=minimal"}});return r.status}
 
 const LINE_CHANNEL_ID=process.env.LINE_CHANNEL_ID;
 const LINE_CHANNEL_SECRET=process.env.LINE_CHANNEL_SECRET;
 const LINE_API="https://api.line.me/v2/bot/message/push";
 const ADMIN_KEY=process.env.ADMIN_KEY||"kida-admin-2024";
+const SHOP_URL="https://www.kida.tw/";
+const LINE_ID="https://line.me/R/ti/p/@kida888";
 
 console.log("🚀 KIDA 可菱水提醒系統 - Supabase 模式啟動");
 
@@ -68,6 +70,7 @@ app.get("/api/admin/registrations",async(req,res)=>{
   }catch(e){res.status(500).json({error:e.message})}
 });
 
+// LINE 推播工具
 async function getLineToken(){
   const r=await axios.post("https://api.line.me/oauth2/v3/token",
     `grant_type=client_credentials&client_id=${LINE_CHANNEL_ID}&client_secret=${LINE_CHANNEL_SECRET}`,
@@ -75,142 +78,112 @@ async function getLineToken(){
   return r.data.access_token;
 }
 
-// Flex Message 推播（含購買按鈕）
-function buildFlexMsg(productName, type) {
-  const configs = {
-    "3days": {
-      headerColor: "#E67E22",
-      emoji: "⏰",
-      title: "濾心即將到期提醒",
-      body: `您的【${productName}】濾心還有 3 天到期！\n\n請提前準備好新濾心，確保全家飲水安全 💧`,
-      urgent: false
-    },
-    "today": {
-      headerColor: "#E74C3C",
-      emoji: "🚨",
-      title: "今天請更換濾心！",
-      body: `您的【${productName}】濾心今天到期\n\n請立即更換，維持最佳過濾效果！\n換完後請重新設定下次提醒 💧`,
-      urgent: true
-    },
-    "overdue": {
-      headerColor: "#C0392B",
-      emoji: "⚠️",
-      title: "濾心已逾期，請盡快更換",
-      body: `您的【${productName}】濾心已逾期\n\n長時間不換濾心會影響過濾效果，請盡速更換！`,
-      urgent: true
-    }
-  };
-  const c = configs[type] || configs["3days"];
+// 建立濾心購買推播訊息（Flex Message，含購買按鈕）
+function buildFilterMsg(productName,type,nextDate){
+  const configs={
+    "7days":{color:"#E67E22",emoji:"⏰",title:"濾心即將到期 - 7天後",body:`您的【${productName}】還有 7 天到期！
 
-  return {
-    type: "flex",
-    altText: `${c.emoji} ${c.title} - ${productName}`,
-    contents: {
-      type: "bubble",
-      size: "mega",
-      header: {
-        type: "box",
-        layout: "horizontal",
-        contents: [
-          {type:"text", text: c.emoji + " " + c.title, weight:"bold", size:"md", color:"#FFFFFF", flex:1, wrap:true}
+現在下單，確保新濾心準時到貨 🚚`,btn:"立即購買濾心"},
+    "3days":{color:"#E74C3C",emoji:"⚠️",title:"濾心到期提醒 - 僅剩3天！",body:`您的【${productName}】只剩 3 天就到期了！
+
+請盡快購買新濾心，確保飲水安全 💧`,btn:"馬上購買濾心"},
+    "today":{color:"#C0392B",emoji:"🚨",title:"今天請更換濾心！",body:`您的【${productName}】今天到期！
+
+請立即更換新濾心，完成後記得重新設定提醒 ✅`,btn:"購買原廠濾心"},
+    "overdue":{color:"#922B21",emoji:"❗",title:"濾心已逾期，請盡快更換",body:`您的【${productName}】已超過更換日期！
+
+逾期使用可能影響水質，請儘快購買更換 🔴`,btn:"立即補購濾心"}
+  };
+  const c=configs[type]||configs["3days"];
+  return{
+    type:"flex",
+    altText:`${c.emoji} ${c.title}｜${productName}`,
+    contents:{
+      type:"bubble",
+      size:"mega",
+      header:{
+        type:"box",layout:"vertical",
+        contents:[
+          {type:"text",text:c.emoji+" "+c.title,weight:"bold",size:"md",color:"#FFFFFF",wrap:true}
         ],
-        backgroundColor: c.headerColor,
-        paddingAll: "16px"
+        backgroundColor:c.color,paddingAll:"16px"
       },
-      body: {
-        type: "box",
-        layout: "vertical",
-        spacing: "md",
-        contents: [
-          {
-            type: "box", layout: "horizontal", spacing: "sm",
-            contents: [
-              {type:"text", text:"產品型號", size:"sm", color:"#888888", flex:3},
-              {type:"text", text: productName, size:"sm", color:"#333333", flex:5, weight:"bold", wrap:true}
-            ]
-          },
-          {type:"separator"},
-          {type:"text", text: c.body, wrap:true, size:"sm", color:"#444444", lineSpacing:"6px"},
-          {type:"separator"},
-          {
-            type:"box", layout:"horizontal", spacing:"sm",
-            contents:[
-              {type:"image", url:"https://www.kida.tw/favicon.ico", size:"xxs", aspectMode:"cover", aspectRatio:"1:1"},
-              {type:"text", text:"KIDA 吉達興居家生活", size:"xs", color:"#888888", gravity:"center"}
-            ]
-          }
+      body:{
+        type:"box",layout:"vertical",
+        contents:[
+          {type:"text",text:c.body,wrap:true,size:"sm",color:"#333333"},
+          {type:"separator",margin:"lg"},
+          {type:"box",layout:"horizontal",margin:"lg",contents:[
+            {type:"text",text:"濾心型號",size:"xs",color:"#888888",flex:2},
+            {type:"text",text:productName,size:"xs",color:"#333333",flex:4,weight:"bold",wrap:true}
+          ]},
+          {type:"box",layout:"horizontal",margin:"sm",contents:[
+            {type:"text",text:"到期日",size:"xs",color:"#888888",flex:2},
+            {type:"text",text:nextDate||"",size:"xs",color:"#333333",flex:4}
+          ]}
         ],
-        paddingAll: "16px"
+        paddingAll:"16px"
       },
-      footer: {
-        type: "box",
-        layout: "vertical",
-        spacing: "sm",
-        contents: [
-          {
-            type: "button",
-            style: "primary",
-            color: "#1976D2",
-            action: {type:"uri", label:"🛒 立即購買原廠濾心", uri:"https://www.kida.tw/"},
-            height: "sm"
-          },
-          {
-            type: "button",
-            style: "secondary",
-            action: {type:"uri", label:"💧 重新設定濾心提醒", uri:"https://liff.line.me/2009728428-SfuyDoV1?tab=r"},
-            height: "sm"
-          },
-          {
-            type: "button",
-            style: "secondary",
-            action: {type:"uri", label:"💬 聯絡客服", uri:"https://line.me/R/ti/p/@kida888"},
-            height: "sm"
-          }
+      footer:{
+        type:"box",layout:"vertical",spacing:"sm",
+        contents:[
+          {type:"button",style:"primary",color:"#1976D2",
+            action:{type:"uri",label:"🛒 "+c.btn,uri:SHOP_URL},height:"sm"},
+          {type:"button",style:"secondary",
+            action:{type:"uri",label:"⚙️ 重新設定提醒",uri:"https://liff.line.me/2009728428-SfuyDoV1?tab=r"},height:"sm"},
+          {type:"button",style:"secondary",
+            action:{type:"uri",label:"💬 聯絡客服 @kida888",uri:LINE_ID},height:"sm"}
         ],
-        paddingAll: "12px"
+        paddingAll:"12px"
       }
     }
   };
 }
 
-async function sendFlexMsg(userId, productName, type) {
-  try {
-    const token = await getLineToken();
-    await axios.post(LINE_API,
-      {to: userId, messages: [buildFlexMsg(productName, type)]},
-      {headers: {"Content-Type":"application/json","Authorization":"Bearer "+token}}
-    );
-    console.log("✅ Flex 推播成功:", userId.substring(0,10), type);
-  } catch(e) {
-    console.error("推播失敗", e.response?.data||e.message);
-  }
+async function sendMsg(userId,productName,type,nextDate){
+  try{
+    const token=await getLineToken();
+    const msg=buildFilterMsg(productName,type,nextDate);
+    await axios.post(LINE_API,{to:userId,messages:[msg]},
+      {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
+    console.log(`✅ 推播成功 [${type}]:${userId.substring(0,10)}...`);
+    return true;
+  }catch(e){console.error("推播失敗",e.response?.data||e.message);return false}
 }
 
 function daysDiff(d){const t=new Date,g=new Date(d);t.setHours(0,0,0,0);g.setHours(0,0,0,0);return Math.round((g-t)/86400000)}
 
-// 每天 09:00 濾心提醒（附購買按鈕）
+// ===== 每天 09:00 濾心提醒（含購買推播）=====
 cron.schedule("0 9 * * *",async()=>{
-  console.log("⏰ 開始執行濾心提醒推播...");
+  console.log("⏰ 開始執行濾心提醒...");
   try{
     const rows=await dbGet("reminders","?notified=eq.0");
+    let sent=0;
     for(const r of rows){
       const d=daysDiff(r.nextDate);
       const name=r.productName||"可菱水濾心";
-      if(d===3) await sendFlexMsg(r.userId, name, "3days");
+      // 7天前提醒（提早讓客戶有時間下單）
+      if(d===7){await sendMsg(r.userId,name,"7days",r.nextDate);sent++;}
+      // 3天前提醒
+      if(d===3){await sendMsg(r.userId,name,"3days",r.nextDate);sent++;}
+      // 當天提醒
       if(d===0){
-        await sendFlexMsg(r.userId, name, "today");
+        await sendMsg(r.userId,name,"today",r.nextDate);
         await dbPatch("reminders","?userId=eq."+r.userId,{notified:1});
+        sent++;
       }
+      // 逾期1天
       if(d===-1){
-        await sendFlexMsg(r.userId, name, "overdue");
+        await sendMsg(r.userId,name,"overdue",r.nextDate);
         await dbPatch("reminders","?userId=eq."+r.userId,{notified:1});
+        sent++;
       }
     }
-    console.log("✅ 濾心提醒完成，共",rows.length,"筆");
+    console.log(`✅ 濾心提醒完成，共 ${rows.length} 筆，發送 ${sent} 則`);
   }catch(e){console.error("提醒失敗",e.message)}
 },{timezone:"Asia/Taipei"});
 
-// 每天 09:05 保固提醒
+// ===== 每天 09:05 保固到期提醒 =====
 cron.schedule("5 9 * * *",async()=>{
   try{
     const rows=await dbGet("registrations","");
@@ -219,11 +192,12 @@ cron.schedule("5 9 * * *",async()=>{
       if(d===30||d===7){
         try{
           const token=await getLineToken();
-          await axios.post(LINE_API,{to:r.userId,messages:[{type:"flex",altText:"📋 保固即將到期提醒",contents:{type:"bubble",header:{type:"box",layout:"vertical",contents:[{type:"text",text:"📋 保固到期提醒",weight:"bold",color:"#FFFFFF"}],backgroundColor:"#2E7D32",paddingAll:"14px"},body:{type:"box",layout:"vertical",spacing:"md",contents:[{type:"box",layout:"horizontal",contents:[{type:"text",text:"產品",size:"sm",color:"#888",flex:2},{type:"text",text:r.productName,size:"sm",weight:"bold",flex:4,wrap:true}]},{type:"box",layout:"horizontal",contents:[{type:"text",text:"到期日",size:"sm",color:"#888",flex:2},{type:"text",text:r.warrantyEnd+"（剩"+d+"天）",size:"sm",weight:"bold",flex:4,color:d<=7?"#E74C3C":"#333"}]}],paddingAll:"16px"},footer:{type:"box",layout:"vertical",spacing:"sm",contents:[{type:"button",style:"primary",color:"#2E7D32",action:{type:"uri",label:"💬 聯絡客服詢問",uri:"https://line.me/R/ti/p/@kida888"},height:"sm"}],paddingAll:"12px"}}}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
+          await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:`📋【保固到期提醒】\n\n您的【${r.productName}】保固到期日：${r.warrantyEnd}（還有 ${d} 天）\n\n如有任何問題請儘速聯繫我們！\n📞 02-2756-5899\n🔗 ${LINE_ID}`}]},
+            {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
         }catch(e){console.error("保固提醒失敗",e.response?.data||e.message)}
       }
     }
   }catch(e){console.error("保固提醒錯誤",e.message)}
 },{timezone:"Asia/Taipei"});
 
-app.listen(PORT,()=>console.log(`🚀 伺服器啟動 port ${PORT} - Supabase + Flex Message 版`));
+app.listen(PORT,()=>console.log(`🚀 伺服器啟動 port ${PORT} - Supabase 永久儲存模式`));
