@@ -16,6 +16,7 @@ const LINE_API="https://api.line.me/v2/bot/message/push";
 const ADMIN_KEY=process.env.ADMIN_KEY||"kida-admin-2024";
 const SHOP_URL="https://www.kida.tw/";
 const LINE_ID="https://line.me/R/ti/p/@kida888";
+const SELF_URL="https://line-reminder-backend.onrender.com";
 
 console.log("KIDA 可菱水提醒系統 - Supabase 模式啟動");
 app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中",db:"Supabase"}));
@@ -76,7 +77,11 @@ function buildFilterMsg(productName,type,nextDate){
   return{type:"flex",altText:`${c.emoji} ${c.title}｜${productName}`,contents:{type:"bubble",size:"mega",
     header:{type:"box",layout:"vertical",contents:[{type:"text",text:c.emoji+" "+c.title,weight:"bold",size:"md",color:"#FFFFFF",wrap:true}],backgroundColor:c.color,paddingAll:"16px"},
     body:{type:"box",layout:"vertical",contents:[{type:"text",text:c.body,wrap:true,size:"sm",color:"#333333"},{type:"separator",margin:"lg"},{type:"box",layout:"horizontal",margin:"lg",contents:[{type:"text",text:"濾心型號",size:"xs",color:"#888888",flex:2},{type:"text",text:productName,size:"xs",color:"#333333",flex:4,weight:"bold",wrap:true}]},{type:"box",layout:"horizontal",margin:"sm",contents:[{type:"text",text:"到期日",size:"xs",color:"#888888",flex:2},{type:"text",text:nextDate||"",size:"xs",color:"#333333",flex:4}]}],paddingAll:"16px"},
-    footer:{type:"box",layout:"vertical",spacing:"sm",contents:[{type:"button",style:"primary",color:"#1976D2",action:{type:"uri",label:"🛒 "+c.btn,uri:SHOP_URL},height:"sm"},{type:"button",style:"secondary",action:{type:"uri",label:"⚙️ 重新設定提醒",uri:"https://liff.line.me/2009728428-SfuyDoV1?tab=r"},height:"sm"},{type:"button",style:"secondary",action:{type:"uri",label:"💬 聯絡客服 @kida888",uri:LINE_ID},height:"sm"}],paddingAll:"12px"}
+    footer:{type:"box",layout:"vertical",spacing:"sm",contents:[
+      {type:"button",style:"primary",color:"#1976D2",action:{type:"uri",label:"🛒 "+c.btn,uri:SHOP_URL},height:"sm"},
+      {type:"button",style:"secondary",action:{type:"uri",label:"⚙️ 重新設定提醒",uri:"https://liff.line.me/2009728428-SfuyDoV1?tab=r"},height:"sm"},
+      {type:"button",style:"secondary",action:{type:"uri",label:"💬 聯絡客服 @kida888",uri:LINE_ID},height:"sm"}
+    ],paddingAll:"12px"}
   }};
 }
 
@@ -115,7 +120,7 @@ async function runWarrantyReminders(){
     const rows=await dbGet("registrations","");let sent=0;
     for(const r of rows){
       const d=daysDiff(r.warrantyEnd);
-      if(d===30||d===7){try{const token=await getLineToken();await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:"📋【保固到期提醒】\n\n您的【"+r.productName+"】保固到期日："+r.warrantyEnd+"（還有 "+d+" 天）\n\n如有任何問題請聯繫我們！\n📞 02-2756-5899"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+await getLineToken()}});sent++;}catch(e){console.error("保固提醒失敗",e.response?.data)}}
+      if(d===30||d===7){try{const token=await getLineToken();await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:"📋【保固到期提醒】\n\n您的【"+r.productName+"】保固到期日："+r.warrantyEnd+"（還有 "+d+" 天）\n\n如有任何問題請聯繫我們！\n📞 02-2756-5899"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});sent++;}catch(e){console.error("保固提醒失敗",e.response?.data)}}
     }
     return{total:rows.length,sent};
   }catch(e){throw e}
@@ -134,7 +139,6 @@ app.get("/api/trigger-warranty",async(req,res)=>{
   try{const r=await runWarrantyReminders();res.json({success:true,...r,timestamp:new Date().toISOString()});}catch(e){res.status(500).json({error:e.message})}
 });
 
-// ===== 測試推播 + Webhook（取得正確 userId）=====
 app.get("/api/test-push",async(req,res)=>{
   if(!checkAdmin(req,res))return;
   const uid=req.query.userId;
@@ -146,14 +150,53 @@ app.get("/api/test-push",async(req,res)=>{
   }catch(e){res.status(500).json({success:false,error:e.response?.data||e.message})}
 });
 
+// ===== 設定 Webhook 並取得目前 Webhook 資訊 =====
+app.get("/api/webhook-info",async(req,res)=>{
+  if(!checkAdmin(req,res))return;
+  try{
+    const token=await getLineToken();
+    const H={"Authorization":"Bearer "+token,"Content-Type":"application/json"};
+    
+    // 取得目前 webhook 設定
+    const getR=await axios.get("https://api.line.me/v2/bot/channel/webhook/endpoint",{headers:H});
+    
+    // 同時設定 webhook URL
+    const setR=await axios.put("https://api.line.me/v2/bot/channel/webhook/endpoint",
+      {webhookEndpointUrl:SELF_URL+"/webhook"},
+      {headers:H}
+    );
+    
+    // 取得 bot info（含 provider 資訊）
+    const botR=await axios.get("https://api.line.me/v2/bot/info",{headers:H});
+    
+    res.json({
+      previousWebhook:getR.data,
+      setWebhookResult:setR.data,
+      botInfo:botR.data
+    });
+  }catch(e){res.status(500).json({error:e.response?.data||e.message})}
+});
+
+// ===== Webhook 接收端點（捕捉正確 userId）=====
 app.post("/webhook",async(req,res)=>{
   res.sendStatus(200);
   const events=req.body?.events||[];
   for(const ev of events){
     if(ev.source?.userId){
       const wid=ev.source.userId;
-      console.log("Webhook event="+ev.type+" userId="+wid);
-      // 如果 db 有此 userId 對應的舊紀錄，不做任何事；新 userId 由此取得
+      const type=ev.type;
+      console.log("【Webhook】type="+type+" userId="+wid);
+      
+      // 如果是訊息事件，自動回覆告知已記錄
+      if(type==="message"&&ev.replyToken){
+        try{
+          const token=await getLineToken();
+          await axios.post("https://api.line.me/v2/bot/message/reply",
+            {replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 已記錄您的ID，提醒系統將會正常運作！"}]},
+            {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}
+          );
+        }catch(e){console.error("reply failed",e.response?.data)}
+      }
     }
   }
 });
