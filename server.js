@@ -12,6 +12,8 @@ async function dbPatch(t,q,b){const r=await axios.patch(SUPA_URL+"/rest/v1/"+t+q
 
 const LINE_CHANNEL_ID=process.env.LINE_CHANNEL_ID;
 const LINE_CHANNEL_SECRET=process.env.LINE_CHANNEL_SECRET;
+// 優先使用 CYBERBIZ 長期 Token，否則用 OAuth2 短期 Token
+const LINE_ACCESS_TOKEN=process.env.LINE_CHANNEL_ACCESS_TOKEN||"";
 const LINE_API="https://api.line.me/v2/bot/message/push";
 const ADMIN_KEY=process.env.ADMIN_KEY||"kida-admin-2024";
 const SHOP_URL="https://www.kida.tw/";
@@ -19,7 +21,9 @@ const LINE_ID="https://line.me/R/ti/p/@kida888";
 const SELF_URL="https://line-reminder-backend.onrender.com";
 
 console.log("KIDA 可菱水提醒系統 - Supabase 模式啟動");
-app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中",db:"Supabase"}));
+console.log("長期Token模式:", LINE_ACCESS_TOKEN ? "是("+LINE_ACCESS_TOKEN.substring(0,10)+"...)" : "否(用OAuth2)");
+
+app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中",db:"Supabase",tokenMode:LINE_ACCESS_TOKEN?"long-lived":"oauth2"}));
 
 app.post("/api/reminder",async(req,res)=>{
   const{userId,nextDate,productDays,productName}=req.body;
@@ -59,7 +63,11 @@ app.get("/api/admin/registrations",async(req,res)=>{
   try{const rows=await dbGet("registrations","?order=createdAt.desc");const today=new Date();today.setHours(0,0,0,0);res.json(rows.map(r=>{const d=new Date(r.warrantyEnd);d.setHours(0,0,0,0);return{...r,warrantyDaysLeft:Math.round((d-today)/86400000)}}));}catch(e){res.status(500).json({error:e.message})}
 });
 
+// ===== Token 取得（優先長期，備援 OAuth2）=====
 async function getLineToken(){
+  if(LINE_ACCESS_TOKEN){
+    return LINE_ACCESS_TOKEN; // 直接用 CYBERBIZ 長期 Token
+  }
   const r=await axios.post("https://api.line.me/oauth2/v3/token",
     `grant_type=client_credentials&client_id=${LINE_CHANNEL_ID}&client_secret=${LINE_CHANNEL_SECRET}`,
     {headers:{"Content-Type":"application/x-www-form-urlencoded"}});
@@ -139,60 +147,30 @@ app.get("/api/trigger-warranty",async(req,res)=>{
   try{const r=await runWarrantyReminders();res.json({success:true,...r,timestamp:new Date().toISOString()});}catch(e){res.status(500).json({error:e.message})}
 });
 
+// ===== 測試推播 =====
 app.get("/api/test-push",async(req,res)=>{
   if(!checkAdmin(req,res))return;
   const uid=req.query.userId;
   if(!uid)return res.status(400).json({error:"需要 ?userId=XXX"});
   try{
     const token=await getLineToken();
-    const r=await axios.post(LINE_API,{to:uid,messages:[{type:"text",text:"🔧 KIDA推播測試 - 收到請忽略"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
-    res.json({success:true,httpStatus:r.status});
+    console.log("test-push token mode:", LINE_ACCESS_TOKEN?"long-lived":"oauth2");
+    const r=await axios.post(LINE_API,{to:uid,messages:[{type:"text",text:"🔧 KIDA推播測試 - 收到請告訴主人！"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
+    res.json({success:true,httpStatus:r.status,tokenMode:LINE_ACCESS_TOKEN?"long-lived":"oauth2"});
   }catch(e){res.status(500).json({success:false,error:e.response?.data||e.message})}
 });
 
-// ===== 設定 Webhook 並取得目前 Webhook 資訊 =====
-app.get("/api/webhook-info",async(req,res)=>{
-  if(!checkAdmin(req,res))return;
-  try{
-    const token=await getLineToken();
-    const H={"Authorization":"Bearer "+token,"Content-Type":"application/json"};
-    
-    // 取得目前 webhook 設定
-    const getR=await axios.get("https://api.line.me/v2/bot/channel/webhook/endpoint",{headers:H});
-    
-    // 同時設定 webhook URL
-    const setR=await axios.put("https://api.line.me/v2/bot/channel/webhook/endpoint",
-      {webhookEndpointUrl:SELF_URL+"/webhook"},
-      {headers:H}
-    );
-    
-    // 取得 bot info（含 provider 資訊）
-    const botR=await axios.get("https://api.line.me/v2/bot/info",{headers:H});
-    
-    res.json({
-      previousWebhook:getR.data,
-      setWebhookResult:setR.data,
-      botInfo:botR.data
-    });
-  }catch(e){res.status(500).json({error:e.response?.data||e.message})}
-});
-
-// ===== Webhook 接收端點（捕捉正確 userId）=====
 app.post("/webhook",async(req,res)=>{
   res.sendStatus(200);
   const events=req.body?.events||[];
   for(const ev of events){
     if(ev.source?.userId){
-      const wid=ev.source.userId;
-      const type=ev.type;
-      console.log("【Webhook】type="+type+" userId="+wid);
-      
-      // 如果是訊息事件，自動回覆告知已記錄
-      if(type==="message"&&ev.replyToken){
+      console.log("Webhook event="+ev.type+" userId="+ev.source.userId);
+      if(ev.type==="message"&&ev.replyToken){
         try{
           const token=await getLineToken();
           await axios.post("https://api.line.me/v2/bot/message/reply",
-            {replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 已記錄您的ID，提醒系統將會正常運作！"}]},
+            {replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 已收到您的訊息！提醒系統正在更新中。"}]},
             {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}
           );
         }catch(e){console.error("reply failed",e.response?.data)}
@@ -201,4 +179,4 @@ app.post("/webhook",async(req,res)=>{
   }
 });
 
-app.listen(PORT,()=>console.log("伺服器啟動 port "+PORT));
+app.listen(PORT,()=>console.log("伺服器啟動 port "+PORT+" - tokenMode:"+(LINE_ACCESS_TOKEN?"long-lived":"oauth2")));
