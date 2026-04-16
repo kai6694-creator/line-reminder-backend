@@ -12,18 +12,14 @@ async function dbPatch(t,q,b){const r=await axios.patch(SUPA_URL+"/rest/v1/"+t+q
 
 const LINE_CHANNEL_ID=process.env.LINE_CHANNEL_ID;
 const LINE_CHANNEL_SECRET=process.env.LINE_CHANNEL_SECRET;
-// 優先使用 CYBERBIZ 長期 Token，否則用 OAuth2 短期 Token
-const LINE_ACCESS_TOKEN=process.env.LINE_CHANNEL_ACCESS_TOKEN||"";
 const LINE_API="https://api.line.me/v2/bot/message/push";
 const ADMIN_KEY=process.env.ADMIN_KEY||"kida-admin-2024";
 const SHOP_URL="https://www.kida.tw/";
 const LINE_ID="https://line.me/R/ti/p/@kida888";
-const SELF_URL="https://line-reminder-backend.onrender.com";
 
-console.log("KIDA 可菱水提醒系統 - Supabase 模式啟動");
-console.log("長期Token模式:", LINE_ACCESS_TOKEN ? "是("+LINE_ACCESS_TOKEN.substring(0,10)+"...)" : "否(用OAuth2)");
+console.log("KIDA 可菱水提醒系統啟動");
 
-app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中",db:"Supabase",tokenMode:LINE_ACCESS_TOKEN?"long-lived":"oauth2"}));
+app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中",db:"Supabase"}));
 
 app.post("/api/reminder",async(req,res)=>{
   const{userId,nextDate,productDays,productName}=req.body;
@@ -63,11 +59,8 @@ app.get("/api/admin/registrations",async(req,res)=>{
   try{const rows=await dbGet("registrations","?order=createdAt.desc");const today=new Date();today.setHours(0,0,0,0);res.json(rows.map(r=>{const d=new Date(r.warrantyEnd);d.setHours(0,0,0,0);return{...r,warrantyDaysLeft:Math.round((d-today)/86400000)}}));}catch(e){res.status(500).json({error:e.message})}
 });
 
-// ===== Token 取得（優先長期，備援 OAuth2）=====
+// OAuth2 v3 短期 token（用 Channel ID + Secret）
 async function getLineToken(){
-  if(LINE_ACCESS_TOKEN){
-    return LINE_ACCESS_TOKEN; // 直接用 CYBERBIZ 長期 Token
-  }
   const r=await axios.post("https://api.line.me/oauth2/v3/token",
     `grant_type=client_credentials&client_id=${LINE_CHANNEL_ID}&client_secret=${LINE_CHANNEL_SECRET}`,
     {headers:{"Content-Type":"application/x-www-form-urlencoded"}});
@@ -147,17 +140,36 @@ app.get("/api/trigger-warranty",async(req,res)=>{
   try{const r=await runWarrantyReminders();res.json({success:true,...r,timestamp:new Date().toISOString()});}catch(e){res.status(500).json({error:e.message})}
 });
 
-// ===== 測試推播 =====
 app.get("/api/test-push",async(req,res)=>{
   if(!checkAdmin(req,res))return;
   const uid=req.query.userId;
   if(!uid)return res.status(400).json({error:"需要 ?userId=XXX"});
   try{
     const token=await getLineToken();
-    console.log("test-push token mode:", LINE_ACCESS_TOKEN?"long-lived":"oauth2");
     const r=await axios.post(LINE_API,{to:uid,messages:[{type:"text",text:"🔧 KIDA推播測試 - 收到請告訴主人！"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
-    res.json({success:true,httpStatus:r.status,tokenMode:LINE_ACCESS_TOKEN?"long-lived":"oauth2"});
+    res.json({success:true,httpStatus:r.status});
   }catch(e){res.status(500).json({success:false,error:e.response?.data||e.message})}
+});
+
+// ===== 取得頻道追蹤者 userId 列表（找正確 userId）=====
+app.get("/api/get-followers",async(req,res)=>{
+  if(!checkAdmin(req,res))return;
+  try{
+    const token=await getLineToken();
+    const H={"Authorization":"Bearer "+token};
+    
+    // 取得 bot info
+    const botR=await axios.get("https://api.line.me/v2/bot/info",{headers:H});
+    
+    // 取得追蹤者 userId 列表（最多 300 個）
+    const followersR=await axios.get("https://api.line.me/v2/bot/followers/ids",{headers:H});
+    
+    res.json({
+      botInfo:botR.data,
+      followers:followersR.data,
+      note:"這些是 channel 1660837350 的真實 userId，用於推播"
+    });
+  }catch(e){res.status(500).json({error:e.response?.data||e.message})}
 });
 
 app.post("/webhook",async(req,res)=>{
@@ -166,17 +178,8 @@ app.post("/webhook",async(req,res)=>{
   for(const ev of events){
     if(ev.source?.userId){
       console.log("Webhook event="+ev.type+" userId="+ev.source.userId);
-      if(ev.type==="message"&&ev.replyToken){
-        try{
-          const token=await getLineToken();
-          await axios.post("https://api.line.me/v2/bot/message/reply",
-            {replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 已收到您的訊息！提醒系統正在更新中。"}]},
-            {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}
-          );
-        }catch(e){console.error("reply failed",e.response?.data)}
-      }
     }
   }
 });
 
-app.listen(PORT,()=>console.log("伺服器啟動 port "+PORT+" - tokenMode:"+(LINE_ACCESS_TOKEN?"long-lived":"oauth2")));
+app.listen(PORT,()=>console.log("KIDA 伺服器啟動 port "+PORT));
