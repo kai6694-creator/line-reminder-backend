@@ -13,6 +13,7 @@ async function dbPatch(t,q,b){const r=await axios.patch(SUPA_URL+"/rest/v1/"+t+q
 const LINE_CHANNEL_ID=process.env.LINE_CHANNEL_ID;
 const LINE_CHANNEL_SECRET=process.env.LINE_CHANNEL_SECRET;
 const LINE_API="https://api.line.me/v2/bot/message/push";
+const LINE_REPLY_API="https://api.line.me/v2/bot/message/reply";
 const ADMIN_KEY=process.env.ADMIN_KEY||"kida-admin-2024";
 const SHOP_URL="https://www.kida.tw/";
 const LINE_ID="https://line.me/R/ti/p/@kida888";
@@ -59,7 +60,6 @@ app.get("/api/admin/registrations",async(req,res)=>{
   try{const rows=await dbGet("registrations","?order=createdAt.desc");const today=new Date();today.setHours(0,0,0,0);res.json(rows.map(r=>{const d=new Date(r.warrantyEnd);d.setHours(0,0,0,0);return{...r,warrantyDaysLeft:Math.round((d-today)/86400000)}}));}catch(e){res.status(500).json({error:e.message})}
 });
 
-// OAuth2 v3 短期 token（用 Channel ID + Secret）
 async function getLineToken(){
   const r=await axios.post("https://api.line.me/oauth2/v3/token",
     `grant_type=client_credentials&client_id=${LINE_CHANNEL_ID}&client_secret=${LINE_CHANNEL_SECRET}`,
@@ -151,33 +151,73 @@ app.get("/api/test-push",async(req,res)=>{
   }catch(e){res.status(500).json({success:false,error:e.response?.data||e.message})}
 });
 
-// ===== 取得頻道追蹤者 userId 列表（找正確 userId）=====
 app.get("/api/get-followers",async(req,res)=>{
   if(!checkAdmin(req,res))return;
   try{
     const token=await getLineToken();
     const H={"Authorization":"Bearer "+token};
-    
-    // 取得 bot info
     const botR=await axios.get("https://api.line.me/v2/bot/info",{headers:H});
-    
-    // 取得追蹤者 userId 列表（最多 300 個）
     const followersR=await axios.get("https://api.line.me/v2/bot/followers/ids",{headers:H});
-    
-    res.json({
-      botInfo:botR.data,
-      followers:followersR.data,
-      note:"這些是 channel 1660837350 的真實 userId，用於推播"
-    });
+    res.json({botInfo:botR.data,followers:followersR.data});
   }catch(e){res.status(500).json({error:e.response?.data||e.message})}
 });
 
+// ===== 方案 A：Webhook 自動配對正確 userId =====
 app.post("/webhook",async(req,res)=>{
   res.sendStatus(200);
   const events=req.body?.events||[];
   for(const ev of events){
-    if(ev.source?.userId){
-      console.log("Webhook event="+ev.type+" userId="+ev.source.userId);
+    if(!ev.source?.userId)continue;
+    const webhookUserId=ev.source.userId;
+    const evType=ev.type;
+    console.log("Webhook event="+evType+" userId="+webhookUserId);
+
+    try{
+      // 1. 檢查這個 userId 是否已在 reminders 中（正確的）
+      const existing=await dbGet("reminders","?userId=eq."+webhookUserId);
+      if(existing&&existing.length>0){
+        console.log("✅ userId 已在 reminders，無需更新");
+        // 回覆確認訊息（僅 message 事件）
+        if(evType==="message"&&ev.replyToken){
+          const token=await getLineToken();
+          const reminder=existing[0];
+          const dLeft=daysDiff(reminder.nextDate);
+          await axios.post(LINE_REPLY_API,
+            {replyToken:ev.replyToken,messages:[{type:"text",
+              text:"💧 您的濾心提醒已設定完成！\n\n產品："+reminder.productName+"\n到期日："+reminder.nextDate+"（還有 "+dLeft+" 天）\n\n到期前將自動通知您，無需擔心！"}]},
+            {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}
+          ).catch(e=>console.error("reply failed",e.response?.data));
+        }
+        continue;
+      }
+
+      // 2. 這個 userId 不在 reminders，需要判斷是否要自動配對
+      // 情況A：新客戶剛用 LIFF 登錄（1小時內有新紀錄），自動把最新那筆更新為正確 userId
+      const oneHourAgo=new Date(Date.now()-60*60*1000).toISOString();
+      const recentNew=await dbGet("reminders","?notified=eq.0&createdAt=gte."+oneHourAgo+"&order=createdAt.desc&limit=1");
+
+      if(recentNew&&recentNew.length>0){
+        const oldUserId=recentNew[0].userId;
+        await dbPatch("reminders","?userId=eq."+oldUserId,{userId:webhookUserId});
+        console.log("✅ 自動配對成功："+oldUserId.substring(0,10)+"... → "+webhookUserId.substring(0,10)+"...");
+
+        // 回覆成功訊息
+        if(evType==="message"&&ev.replyToken){
+          const token=await getLineToken();
+          const reminder=recentNew[0];
+          const dLeft=daysDiff(reminder.nextDate);
+          await axios.post(LINE_REPLY_API,
+            {replyToken:ev.replyToken,messages:[{type:"text",
+              text:"✅ 濾心提醒設定完成！\n\n產品："+reminder.productName+"\n到期日："+reminder.nextDate+"（還有 "+dLeft+" 天）\n\n到期前我們會自動通知您 💧"}]},
+            {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}
+          ).catch(e=>console.error("reply failed",e.response?.data));
+        }
+      } else {
+        // 情況B：一般訊息（沒有近期新設定的提醒），不做任何更新
+        console.log("ℹ️ 此 userId 無對應 reminder，略過："+webhookUserId.substring(0,10)+"...");
+      }
+    }catch(e){
+      console.error("Webhook 處理錯誤:",e.message);
     }
   }
 });
