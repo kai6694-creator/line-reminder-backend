@@ -107,10 +107,24 @@ app.post("/webhook",async(req,res)=>{
 
     // 3. 濾心提醒 auto-mapping（原有邏輯）
     try{
+      // 查詢此 Messaging API userId 在 reminders 的現有記錄
       const existing=await dbGet("reminders","?userId=eq."+wId);
+      
+      // 查詢 1 小時內新建、userId 不是 wId 的提醒（LIFF userId 建立的新提醒）
+      const oneHrAgo=new Date(Date.now()-60*60*1000).toISOString();
+      const recentNew=await dbGet("reminders","?notified=eq.0&createdAt=gte."+oneHrAgo+"&userId=neq."+wId+"&order=createdAt.desc");
+      
+      // 把近期 LIFF userId 的提醒全部更新為正確的 Messaging API userId
+      if(recentNew&&recentNew.length>0){
+        for(const rem of recentNew){
+          await dbPatch("reminders","?id=eq."+rem.id,{userId:wId});
+          console.log("自動配對成功（新提醒）："+rem.userId.substring(0,10)+"→"+wId.substring(0,10));
+        }
+      }
+
       if(existing&&existing.length>0){
-        console.log("userId 已在 reminders，無需更新");
-        if(eType==="message"&&ev.replyToken){
+        console.log("userId 已在 reminders，共"+existing.length+"筆");
+        if(eType==="message"&&ev.replyToken&&!recentNew?.length){
           const token=await getLineToken();
           const rem=existing[0];
           const dLeft=daysDiff(rem.nextDate);
@@ -118,12 +132,13 @@ app.post("/webhook",async(req,res)=>{
         }
         continue;
       }
-      const oneHrAgo=new Date(Date.now()-60*60*1000).toISOString();
+
+      // 全新用戶：找最近 1 小時內的提醒配對
       const recent=await dbGet("reminders","?notified=eq.0&createdAt=gte."+oneHrAgo+"&order=createdAt.desc&limit=1");
       if(recent&&recent.length>0){
         const oldId=recent[0].userId;
-        await dbPatch("reminders","?userId=eq."+oldId,{userId:wId});
-        console.log("自動配對成功："+oldId.substring(0,10)+"→"+wId.substring(0,10));
+        await dbPatch("reminders","?id=eq."+recent[0].id,{userId:wId});
+        console.log("全新用戶配對成功："+oldId.substring(0,10)+"→"+wId.substring(0,10));
         if(eType==="message"&&ev.replyToken){
           const token=await getLineToken();
           const rem=recent[0];
