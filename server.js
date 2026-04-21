@@ -135,4 +135,101 @@ app.post("/webhook",async(req,res)=>{
 // ===== 結束新增 API =====
 
 
+// ===== 優惠券系統 API =====
+const COUPON_MODELS = ['EF103','EF201','EF202','EF203','EF301','EF401',
+  'ET101','ET201','EU102','EU103','EU202','EU203','EU301','EU302',
+  'ES301','ES201W','ES101',
+  'EJ103','CP013','JP407D','JP407R','JP407T'];
+
+function genCouponToken(){
+  const crypto=require('crypto');
+  return 'KIDA-'+crypto.randomBytes(4).toString('hex').toUpperCase();
+}
+
+// POST /api/register-product
+app.post('/api/register-product',async(req,res)=>{
+  const userId=req.body.userId||req.body.line_user_id;
+  const userName=req.body.userName||req.body.user_name||'';
+  const productCode=req.body.productCode||req.body.product_model;
+  const productName=req.body.productName||req.body.product_model;
+  const purchaseDate=req.body.purchaseDate||req.body.purchase_date;
+  const purchasePlace=req.body.purchasePlace||req.body.purchase_place||'';
+  if(!userId||!productCode||!purchaseDate)
+    return res.status(400).json({success:false,message:'缺少必要欄位'});
+  try{
+    const existing=await dbGet('registrations','?userId=eq.'+userId+'&productCode=eq.'+encodeURIComponent(productCode));
+    if(existing&&existing.length>0)
+      return res.status(409).json({success:false,message:'此型號已登錄過'});
+    const d=new Date(purchaseDate);d.setFullYear(d.getFullYear()+1);
+    const warrantyEnd=d.toISOString().split('T')[0];
+    const shouldIssueCoupon=COUPON_MODELS.includes(productCode);
+    const couponToken=shouldIssueCoupon?genCouponToken():null;
+    const couponExpireDate=shouldIssueCoupon?new Date(Date.now()+30*24*60*60*1000).toISOString().split('T')[0]:null;
+    const now=new Date().toISOString();
+    await dbPost('registrations',{
+      userId,userName,productName:productName||productCode,productCode,
+      purchaseDate,purchasePlace,warrantyEnd,couponToken,couponDiscount:0.95,
+      couponStatus:shouldIssueCoupon?'issued':null,
+      couponExpireDate,couponSentAt:shouldIssueCoupon?now:null,
+    });
+    // 推播由 webhook 處理（解決 Provider userId 不同問題）
+    res.json({success:true,
+      message:shouldIssueCoupon?'登錄成功！95 折優惠券已發放，請留意 @kida888 的 LINE 通知':'登錄成功！',
+      warrantyEnd,couponToken});
+  }catch(e){console.error('register-product error:',e.message);res.status(500).json({success:false,message:'伺服器錯誤'});}
+});
+
+// GET /api/coupon/status
+app.get('/api/coupon/status',async(req,res)=>{
+  const userId=req.query.userId||req.query.line_user_id;
+  if(!userId)return res.status(400).json({success:false,message:'缺少 userId'});
+  try{
+    const rows=await dbGet('registrations','?userId=eq.'+userId+'&couponToken=not.is.null&order=createdAt.desc');
+    const today=new Date().toISOString().split('T')[0];
+    const data=rows.map(r=>{
+      let status=r.couponStatus||'issued';
+      if(status!=='used'&&r.couponExpireDate&&r.couponExpireDate<today)status='expired';
+      return{productCode:r.productCode,productName:r.productName,purchaseDate:r.purchaseDate,
+        couponToken:r.couponToken,couponDiscount:r.couponDiscount,couponStatus:status,
+        couponExpireDate:r.couponExpireDate,couponUsedAt:r.couponUsedAt,redeemedBy:r.redeemedBy};
+    });
+    res.json({success:true,data});
+  }catch(e){res.status(500).json({success:false,message:e.message});}
+});
+
+// GET /api/coupon/verify
+app.get('/api/coupon/verify',async(req,res)=>{
+  const{token}=req.query;
+  if(!token)return res.status(400).json({valid:false,message:'缺少 token'});
+  try{
+    const rows=await dbGet('registrations','?couponToken=eq.'+encodeURIComponent(token));
+    if(!rows||rows.length===0)return res.json({valid:false,message:'查無此券號'});
+    const r=rows[0];
+    const today=new Date().toISOString().split('T')[0];
+    if(r.couponStatus==='used')return res.json({valid:false,message:'此券已核銷',usedAt:r.couponUsedAt,redeemedBy:r.redeemedBy});
+    if(r.couponExpireDate&&r.couponExpireDate<today)return res.json({valid:false,message:'此券已過期',expiredAt:r.couponExpireDate});
+    res.json({valid:true,couponToken:r.couponToken,couponDiscount:r.couponDiscount,
+      productCode:r.productCode,productName:r.productName,userName:r.userName,couponExpireDate:r.couponExpireDate});
+  }catch(e){res.status(500).json({valid:false,message:e.message});}
+});
+
+// POST /api/coupon/redeem
+app.post('/api/coupon/redeem',async(req,res)=>{
+  const{token,redeemedBy}=req.body;
+  if(!token)return res.status(400).json({success:false,message:'缺少 token'});
+  try{
+    const rows=await dbGet('registrations','?couponToken=eq.'+encodeURIComponent(token));
+    if(!rows||rows.length===0)return res.json({success:false,message:'查無此券號'});
+    const r=rows[0];
+    const today=new Date().toISOString().split('T')[0];
+    if(r.couponStatus==='used')return res.json({success:false,message:'此券已核銷',usedAt:r.couponUsedAt});
+    if(r.couponExpireDate&&r.couponExpireDate<today)return res.json({success:false,message:'此券已過期'});
+    const now=new Date().toISOString();
+    await dbPatch('registrations','?couponToken=eq.'+encodeURIComponent(token),
+      {couponStatus:'used',couponUsedAt:now,redeemedBy:redeemedBy||'門市'});
+    console.log('核銷成功:',token,'門市:',redeemedBy||'門市');
+    res.json({success:true,message:'核銷成功',couponToken:token,redeemedBy,usedAt:now});
+  }catch(e){res.status(500).json({success:false,message:e.message});}
+});
+
 app.listen(PORT,()=>console.log("KIDA 伺服器啟動 port "+PORT));
