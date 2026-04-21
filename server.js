@@ -71,7 +71,7 @@ app.post("/webhook",async(req,res)=>{
 
     if(eType==="message"){
       // 1. LIFF 觸發信號：登錄後 LIFF 自動發送，配對 messagingUserId 並推播
-      if(ev.message?.text==="__KIDA_COUPON__"){
+      if(ev.message?.text==="KIDA_保固登錄完成"){
         try{
           const fiveMinAgo=new Date(Date.now()-5*60*1000).toISOString();
           const pending=await dbGet("registrations",
@@ -82,7 +82,11 @@ app.post("/webhook",async(req,res)=>{
             await sendCouponPush(wId,reg);
             console.log("LIFF觸發發券成功:",reg.couponToken,"->",wId.substring(0,10));
           }else{
-            console.log("無待發優惠券（5分鐘內）");
+            // 查無待發券，發通用歡迎訊息
+            if(ev.replyToken){
+              const token=await getLineToken();
+              await axios.post(LINE_REPLY,{replyToken:ev.replyToken,messages:[{type:"text",text:"感謝您登錄產品保固！\n如有任何問題歡迎聯繫我們 😊"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}).catch(()=>{});
+            }
           }
         }catch(e){console.error("LIFF觸發錯誤:",e.message);}
         continue;
