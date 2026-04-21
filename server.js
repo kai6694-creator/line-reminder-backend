@@ -64,6 +64,37 @@ app.post("/webhook",async(req,res)=>{
     const eType=ev.type;
     console.log("Webhook event="+eType+" userId="+wId);
 
+    // ===== 任何訊息都嘗試補推待發優惠券（解決 Provider 不同問題）=====
+    if(eType==="message"){
+      try{
+        // 查找此 Messaging API userId 是否有待推播的優惠券（LIFF userId 不同）
+        const myReg=await dbGet("registrations","?userId=eq."+wId+"&couponStatus=eq.issued&couponToken=not.is.null");
+        if(myReg && myReg.length>0){
+          // 已知 userId 有優惠券，但 couponSentAt 有值代表已嘗試發過（用 LIFF userId），需要重新推播
+          const reg=myReg[0];
+          const token=await getLineToken();
+          const msgText=[
+            "KIDA 吉達興居家生活","",
+            "感謝您登錄產品保固！",
+            "您的專屬 95 折濾心換購券已發放 🎉","",
+            "券號："+reg.couponToken,
+            "折扣：95 折",
+            "有效期限："+reg.couponExpireDate,"",
+            "憑此券號至各門市購買原廠濾心享 95 折優惠","",
+            "點擊查看優惠券：",
+            "https://liff.line.me/2009728428-I07Nl5fZ"
+          ].join("\n");
+          await axios.post(LINE_API,
+            {to:wId,messages:[{type:"text",text:msgText}]},
+            {headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}
+          );
+          // 標記為已送達
+          await dbPatch("registrations","?couponToken=eq."+encodeURIComponent(reg.couponToken),{couponStatus:"delivered"});
+          console.log("補發優惠券成功:",reg.couponToken,"->",wId.substring(0,10));
+        }
+      }catch(e){console.error("補發優惠券錯誤:",e.message);}
+    }
+
     // ===== 優惠券觸發：LIFF sendMessages 觸發後用正確的 Messaging API userId 推播 =====
     if(eType==="message" && ev.message?.text==="__KIDA_COUPON__"){
       try{
