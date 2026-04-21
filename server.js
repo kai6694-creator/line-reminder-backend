@@ -70,6 +70,31 @@ app.post("/webhook",async(req,res)=>{
     console.log("Webhook event="+eType+" userId="+wId.substring(0,10));
 
     if(eType==="message"){
+      // 0. 濾心提醒設定觸發：配對 Messaging API userId 並回覆確認
+      if(ev.message?.text==="KIDA_提醒設定完成"){
+        try{
+          const fiveMinAgo=new Date(Date.now()-5*60*1000).toISOString();
+          // 找 5 分鐘內新建、不是此 Messaging API userId 的提醒
+          const newRem=await dbGet("reminders","?notified=eq.0&createdAt=gte."+fiveMinAgo+"&userId=neq."+wId+"&order=createdAt.desc");
+          if(newRem&&newRem.length>0){
+            for(const rem of newRem){
+              await dbPatch("reminders","?id=eq."+rem.id,{userId:wId});
+              console.log("提醒設定配對成功："+rem.userId.substring(0,10)+"→"+wId.substring(0,10));
+            }
+            if(ev.replyToken){
+              const token=await getLineToken();
+              const rem=newRem[0];
+              const dLeft=daysDiff(rem.nextDate);
+              await axios.post(LINE_REPLY,{replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 濾心更換提醒設定完成！\n\n產品："+rem.productName+"\n到期日："+rem.nextDate+"（還有 "+dLeft+" 天）\n\n到期前我們會自動通知您 💧"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}).catch(()=>{});
+            }
+          }else if(ev.replyToken){
+            const token=await getLineToken();
+            await axios.post(LINE_REPLY,{replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 您的濾心提醒已更新！到期前我們會自動通知您 💧"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}).catch(()=>{});
+          }
+        }catch(e){console.error("提醒設定觸發錯誤:",e.message);}
+        continue;
+      }
+
       // 1. LIFF 觸發信號：登錄後 LIFF 自動發送，配對 messagingUserId 並推播
       if(ev.message?.text==="KIDA_保固登錄完成"){
         try{
