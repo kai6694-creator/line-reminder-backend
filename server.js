@@ -81,15 +81,7 @@ app.post("/webhook",async(req,res)=>{
               await dbPatch("reminders","?id=eq."+rem.id,{userId:wId});
               console.log("提醒設定配對成功："+rem.userId.substring(0,10)+"→"+wId.substring(0,10));
             }
-            if(ev.replyToken){
-              const token=await getLineToken();
-              const rem=newRem[0];
-              const dLeft=daysDiff(rem.nextDate);
-              await axios.post(LINE_REPLY,{replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 濾心更換提醒設定完成！\n\n產品："+rem.productName+"\n到期日："+rem.nextDate+"（還有 "+dLeft+" 天）\n\n到期前我們會自動通知您 💧"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}).catch(()=>{});
-            }
-          }else if(ev.replyToken){
-            const token=await getLineToken();
-            await axios.post(LINE_REPLY,{replyToken:ev.replyToken,messages:[{type:"text",text:"✅ 您的濾心提醒已更新！到期前我們會自動通知您 💧"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}).catch(()=>{});
+            // LINE OA 關鍵字自動回應已處理確認訊息，不重複回覆
           }
         }catch(e){console.error("提醒設定觸發錯誤:",e.message);}
         continue;
