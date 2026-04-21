@@ -120,9 +120,16 @@ function genCouponToken() {
 
 // POST /api/register-product  整合版登錄（存 Supabase + 發券）
 app.post('/api/register-product', async (req, res) => {
-  const { userId, userName, productCode, productName, purchaseDate, purchasePlace } = req.body;
+  // 同時相容舊欄位名（line_user_id, product_model）和新欄位名（userId, productCode）
+  const userId       = req.body.userId       || req.body.line_user_id;
+  const userName     = req.body.userName     || req.body.user_name || '';
+  const productCode  = req.body.productCode  || req.body.product_model;
+  const productName  = req.body.productName  || req.body.product_model;
+  const purchaseDate = req.body.purchaseDate || req.body.purchase_date;
+  const purchasePlace= req.body.purchasePlace|| req.body.purchase_place || '';
+
   if (!userId || !productCode || !purchaseDate)
-    return res.status(400).json({ success: false, message: '缺少必要欄位' });
+    return res.status(400).json({ success: false, message: '缺少必要欄位（userId/productCode/purchaseDate）' });
 
   try {
     // 防重複：同帳號 + 同型號
