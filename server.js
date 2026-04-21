@@ -93,4 +93,197 @@ app.post("/webhook",async(req,res)=>{
     }catch(e){console.error("Webhook 處理錯誤:",e.message)}
   }
 });
+
+// ===== 新增：產品登錄 + 自動發券 =====
+// 發券型號：全部型號（EF/ET/EU/ES/EJ/CP/JP）皆發 95 折券
+const COUPON_MODELS = ['EF103','EF201','EF202','EF203','EF301','EF401',
+  'ET101','ET201','EU102','EU103','EU202','EU203','EU301','EU302',
+  'ES301','ES201W','ES101',
+  'EJ103','CP013','JP407D','JP407R','JP407T'];
+
+const MSG_CHANNEL_ID     = '1660837350';
+const MSG_CHANNEL_SECRET = 'ac545ec3cdb9e0d249860ae3d926ca91';
+
+async function getMsgToken() {
+  const r = await axios.post(
+    'https://api.line.me/oauth2/v3/token',
+    `grant_type=client_credentials&client_id=${MSG_CHANNEL_ID}&client_secret=${MSG_CHANNEL_SECRET}`,
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+  );
+  return r.data.access_token;
+}
+
+function genCouponToken() {
+  const crypto = require('crypto');
+  return 'KIDA-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+}
+
+// POST /api/register-product  整合版登錄（存 Supabase + 發券）
+app.post('/api/register-product', async (req, res) => {
+  const { userId, userName, productCode, productName, purchaseDate, purchasePlace } = req.body;
+  if (!userId || !productCode || !purchaseDate)
+    return res.status(400).json({ success: false, message: '缺少必要欄位' });
+
+  try {
+    // 防重複：同帳號 + 同型號
+    const existing = await dbGet('registrations',
+      '?userId=eq.' + userId + '&productCode=eq.' + encodeURIComponent(productCode));
+    if (existing && existing.length > 0)
+      return res.status(409).json({ success: false, message: '此型號已登錄過' });
+
+    // 計算保固到期日（1年）
+    const d = new Date(purchaseDate);
+    d.setFullYear(d.getFullYear() + 1);
+    const warrantyEnd = d.toISOString().split('T')[0];
+
+    // 判斷是否發券（全部型號皆發）
+    const shouldIssueCoupon = COUPON_MODELS.includes(productCode);
+    const couponToken    = shouldIssueCoupon ? genCouponToken() : null;
+    const couponExpireDate = shouldIssueCoupon
+      ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      : null;
+    const now = new Date().toISOString();
+
+    // 寫入 Supabase
+    await dbPost('registrations', {
+      userId,
+      userName: userName || '',
+      productName: productName || productCode,
+      productCode,
+      purchaseDate,
+      purchasePlace: purchasePlace || '',
+      warrantyEnd,
+      couponToken,
+      couponDiscount: 0.95,
+      couponStatus: shouldIssueCoupon ? 'issued' : null,
+      couponExpireDate,
+      couponSentAt: shouldIssueCoupon ? now : null,
+    });
+
+    // 發 LINE 推播
+    if (shouldIssueCoupon && couponToken) {
+      try {
+        const token = await getMsgToken();
+        const msgText = [
+          'KIDA 吉達興居家生活',
+          '',
+          '感謝您登錄產品保固！',
+          '您的專屬 95 折濾心換購券已發放 🎉',
+          '',
+          '券號：' + couponToken,
+          '折扣：95 折',
+          '有效期限：' + couponExpireDate,
+          '',
+          '憑此券號至各門市購買原廠濾心享 95 折優惠',
+          '',
+          '點擊查看優惠券：',
+          'https://liff.line.me/2009728428-I07Nl5fZ'
+        ].join('\n');
+
+        await axios.post(LINE_API,
+          { to: userId, messages: [{ type: 'text', text: msgText }] },
+          { headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token } }
+        );
+        console.log('優惠券推播成功:', couponToken, '->', userId.substr(0, 10));
+      } catch (pushErr) {
+        console.error('LINE 推播失敗:', pushErr.response?.data || pushErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: shouldIssueCoupon ? '登錄成功！95 折優惠券已發送至您的 LINE' : '登錄成功！',
+      warrantyEnd,
+      couponToken
+    });
+  } catch (e) {
+    console.error('register-product error:', e.message);
+    res.status(500).json({ success: false, message: '伺服器錯誤' });
+  }
+});
+
+// GET /api/coupon/status?userId=  查詢用戶優惠券
+app.get('/api/coupon/status', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ success: false, message: '缺少 userId' });
+  try {
+    const rows = await dbGet('registrations',
+      '?userId=eq.' + userId + '&couponToken=not.is.null&order=createdAt.desc');
+    const today = new Date().toISOString().split('T')[0];
+    const data = rows.map(r => {
+      let status = r.couponStatus || 'issued';
+      if (status !== 'used' && r.couponExpireDate && r.couponExpireDate < today) status = 'expired';
+      return {
+        productCode: r.productCode,
+        productName: r.productName,
+        purchaseDate: r.purchaseDate,
+        couponToken: r.couponToken,
+        couponDiscount: r.couponDiscount,
+        couponStatus: status,
+        couponExpireDate: r.couponExpireDate,
+        couponUsedAt: r.couponUsedAt,
+        redeemedBy: r.redeemedBy,
+      };
+    });
+    res.json({ success: true, data });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// GET /api/coupon/verify?token=  核銷頁面驗證券號
+app.get('/api/coupon/verify', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ valid: false, message: '缺少 token' });
+  try {
+    const rows = await dbGet('registrations', '?couponToken=eq.' + encodeURIComponent(token));
+    if (!rows || rows.length === 0) return res.json({ valid: false, message: '查無此券號' });
+    const r = rows[0];
+    const today = new Date().toISOString().split('T')[0];
+    if (r.couponStatus === 'used')
+      return res.json({ valid: false, message: '此券已核銷', usedAt: r.couponUsedAt, redeemedBy: r.redeemedBy });
+    if (r.couponExpireDate && r.couponExpireDate < today)
+      return res.json({ valid: false, message: '此券已過期', expiredAt: r.couponExpireDate });
+    res.json({
+      valid: true,
+      couponToken: r.couponToken,
+      couponDiscount: r.couponDiscount,
+      productCode: r.productCode,
+      productName: r.productName,
+      userName: r.userName,
+      couponExpireDate: r.couponExpireDate,
+    });
+  } catch (e) {
+    res.status(500).json({ valid: false, message: e.message });
+  }
+});
+
+// POST /api/coupon/redeem  核銷優惠券
+app.post('/api/coupon/redeem', async (req, res) => {
+  const { token, redeemedBy } = req.body;
+  if (!token) return res.status(400).json({ success: false, message: '缺少 token' });
+  try {
+    const rows = await dbGet('registrations', '?couponToken=eq.' + encodeURIComponent(token));
+    if (!rows || rows.length === 0) return res.json({ success: false, message: '查無此券號' });
+    const r = rows[0];
+    const today = new Date().toISOString().split('T')[0];
+    if (r.couponStatus === 'used')
+      return res.json({ success: false, message: '此券已核銷', usedAt: r.couponUsedAt });
+    if (r.couponExpireDate && r.couponExpireDate < today)
+      return res.json({ success: false, message: '此券已過期' });
+    const now = new Date().toISOString();
+    await dbPatch('registrations', '?couponToken=eq.' + encodeURIComponent(token), {
+      couponStatus: 'used',
+      couponUsedAt: now,
+      redeemedBy: redeemedBy || '門市',
+    });
+    console.log('核銷成功:', token, '門市:', redeemedBy || '門市');
+    res.json({ success: true, message: '核銷成功', couponToken: token, redeemedBy, usedAt: now });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+// ===== 結束新增 API =====
+
+
 app.listen(PORT,()=>console.log("KIDA 伺服器啟動 port "+PORT));
