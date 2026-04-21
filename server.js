@@ -274,7 +274,7 @@ app.post('/api/register-product', async (req, res) => {
 
 // GET /api/coupon/status?userId=  查詢用戶優惠券
 app.get('/api/coupon/status', async (req, res) => {
-  const { userId } = req.query;
+  const userId = req.query.userId || req.query.line_user_id;
   if (!userId) return res.status(400).json({ success: false, message: '缺少 userId' });
   try {
     const rows = await dbGet('registrations',
