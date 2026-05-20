@@ -17,7 +17,7 @@ const LINE_ID="https://line.me/R/ti/p/@kida888";
 console.log("KIDA 可菱水提醒系統啟動（方案A）");
 app.get("/",(req,res)=>res.json({status:"ok",message:"KIDA 可菱水提醒系統運作中",planA:true}));
 app.post("/api/reminder",async(req,res)=>{
-  const{userId,nextDate,productDays,productName}=req.body;
+  const{userId,userName,nextDate,productDays,productName}=req.body;
   if(!userId||!nextDate||!productDays)return res.status(400).json({error:"missing fields"});
   try{
     const existing=await dbGet("reminders","?userId=eq."+userId);
