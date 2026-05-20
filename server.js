@@ -21,7 +21,7 @@ app.post("/api/reminder",async(req,res)=>{
   if(!userId||!nextDate||!productDays)return res.status(400).json({error:"missing fields"});
   try{
     const existing=await dbGet("reminders","?userId=eq."+userId);
-    if(existing&&existing.length>0){await dbPatch("reminders","?userId=eq."+userId,{nextDate,productDays:parseInt(productDays),productName:productName||"",notified:0});}
+    if(existing&&existing.length>0){await dbPatch("reminders","?userId=eq."+userId,{nextDate,productDays:parseInt(productDays),productName:productName||"",userName:userName||"",notified:0});}
     else{await dbPost("reminders",{userId,nextDate,productDays:parseInt(productDays),productName:productName||"",notified:0});}
     res.json({success:true});
   }catch(e){res.status(500).json({error:"server error"})}
