@@ -268,4 +268,24 @@ app.post('/api/coupon/redeem',async(req,res)=>{
   }catch(e){res.status(500).json({success:false,message:e.message});}
 });
 
+// ── 刪除濾心提醒記錄 ──
+app.delete("/api/admin/reminders/:id", async(req,res)=>{
+  if(req.query.key!==process.env.ADMIN_KEY)return res.status(403).json({error:"Forbidden"});
+  try{
+    const{id}=req.params;
+    await axios.delete(`${process.env.SUPABASE_URL}/rest/v1/reminders?id=eq.${id}`,{headers:{apikey:process.env.SUPABASE_SERVICE_KEY,"Authorization":"Bearer "+process.env.SUPABASE_SERVICE_KEY}});
+    res.json({success:true,deleted:id});
+  }catch(e){res.status(500).json({error:e.message});}
+});
+
+// ── 刪除產品登錄記錄 ──
+app.delete("/api/admin/registrations/:id", async(req,res)=>{
+  if(req.query.key!==process.env.ADMIN_KEY)return res.status(403).json({error:"Forbidden"});
+  try{
+    const{id}=req.params;
+    await axios.delete(`${process.env.SUPABASE_URL}/rest/v1/registrations?id=eq.${id}`,{headers:{apikey:process.env.SUPABASE_SERVICE_KEY,"Authorization":"Bearer "+process.env.SUPABASE_SERVICE_KEY}});
+    res.json({success:true,deleted:id});
+  }catch(e){res.status(500).json({error:e.message});}
+});
+
 app.listen(PORT,()=>console.log("KIDA 伺服器啟動 port "+PORT));
