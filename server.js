@@ -53,8 +53,42 @@ async function sendCouponPush(toUserId, reg){
   await axios.post(LINE_API,{to:toUserId,messages:[{type:"text",text:msgText}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
 }
 async function runWarrantyReminders(){try{const rows=await dbGet("registrations","");let sent=0;for(const r of rows){const d=daysDiff(r.warrantyEnd);if(d===30||d===7){try{const token=await getLineToken();await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:"📋【保固到期提醒】\n\n您的【"+r.productName+"】保固到期日："+r.warrantyEnd+"（還有 "+d+" 天）\n\n如有任何問題請聯繫我們！\n📞 02-2756-5899"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});sent++;}catch(e){console.error("保固提醒失敗",e.response?.data)}}}return{total:rows.length,sent};}catch(e){throw e}}
+// ── 優惠券到期提醒 ──
+async function runCouponReminders(){
+  try{
+    const rows=await dbGet("registrations","?couponStatus=eq.issued");
+    let sent=0;
+    for(const r of rows){
+      if(!r.messagingUserId||!r.couponExpireDate)continue;
+      const d=daysDiff(r.couponExpireDate);
+      if(d===7||d===3||d===0){
+        try{
+          const token=await getLineToken();
+          const dayMsg=d===0?"今天是最後一天！":("還有 "+d+" 天到期");
+          await axios.post(LINE_API,{
+            to:r.messagingUserId,
+            messages:[{
+              type:"text",
+              text:"🎟️【優惠券到期提醒】\n\n您的 KIDA 95 折濾心換購優惠券即將到期！\n\n券號："+r.couponToken+"\n到期日："+r.couponExpireDate+"（"+dayMsg+"）\n\n請盡快前往吉達興百貨專櫃使用 💧\n📞 02-2756-5899"
+            }]
+          },{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
+          sent++;
+          console.log("優惠券提醒已發送："+r.couponToken+" 距到期 "+d+" 天");
+        }catch(e){console.error("優惠券提醒失敗",r.couponToken,e.message);}
+      }
+    }
+    console.log("優惠券到期提醒完成，發送 "+sent+" 筆");
+    return{success:true,sent};
+  }catch(e){
+    console.error("runCouponReminders error:",e.message);
+    return{success:false,error:e.message};
+  }
+}
+
 cron.schedule("0 9 * * *",async()=>{await runFilterReminders();},{timezone:"Asia/Taipei"});
 cron.schedule("5 9 * * *",async()=>{await runWarrantyReminders();},{timezone:"Asia/Taipei"});
+cron.schedule("10 9 * * *",async()=>{await runCouponReminders();},{timezone:"Asia/Taipei"});
+app.get("/api/trigger-coupon-reminders",async(req,res)=>{if(!checkAdmin(req,res))return;try{const r=await runCouponReminders();res.json(r);}catch(e){res.status(500).json({error:e.message});}});
 app.get("/api/trigger-reminders",async(req,res)=>{if(!checkAdmin(req,res))return;try{const r=await runFilterReminders();res.json({success:true,...r,timestamp:new Date().toISOString()});}catch(e){res.status(500).json({error:e.message})}});
 app.get("/api/trigger-warranty",async(req,res)=>{if(!checkAdmin(req,res))return;try{const r=await runWarrantyReminders();res.json({success:true,...r,timestamp:new Date().toISOString()});}catch(e){res.status(500).json({error:e.message})}});
 app.get("/api/test-push",async(req,res)=>{if(!checkAdmin(req,res))return;const uid=req.query.userId;if(!uid)return res.status(400).json({error:"需要 ?userId=XXX"});try{const token=await getLineToken();const r=await axios.post(LINE_API,{to:uid,messages:[{type:"text",text:"🔧 KIDA推播測試 - 收到請告訴主人！"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});res.json({success:true,httpStatus:r.status});}catch(e){res.status(500).json({success:false,error:e.response?.data||e.message})}});
