@@ -43,7 +43,7 @@ function checkAdmin(req,res){const key=req.headers["x-admin-key"]||req.query.key
 app.get("/api/admin/reminders",async(req,res)=>{if(!checkAdmin(req,res))return;try{const rows=await dbGet("reminders","?order=nextDate.asc");const today=new Date();today.setHours(0,0,0,0);res.json(rows.map(r=>{const d=new Date(r.nextDate);d.setHours(0,0,0,0);return{...r,daysLeft:Math.round((d-today)/86400000)}}));}catch(e){res.status(500).json({error:e.message})}});
 app.get("/api/admin/registrations",async(req,res)=>{if(!checkAdmin(req,res))return;try{const rows=await dbGet("registrations","?order=createdAt.desc");const today=new Date();today.setHours(0,0,0,0);res.json(rows.map(r=>{const d=new Date(r.warrantyEnd);d.setHours(0,0,0,0);return{...r,warrantyDaysLeft:Math.round((d-today)/86400000)}}));}catch(e){res.status(500).json({error:e.message})}});
 async function getLineToken(){const r=await axios.post("https://api.line.me/oauth2/v3/token",`grant_type=client_credentials&client_id=${LINE_CHANNEL_ID}&client_secret=${LINE_CHANNEL_SECRET}`,{headers:{"Content-Type":"application/x-www-form-urlencoded"}});return r.data.access_token;}
-function buildFilterMsg(productName,type,nextDate){const configs={"7days":{color:"#E67E22",emoji:"⏰",title:"濾心即將到期 - 7天後",body:`您的【${productName}】還有 7 天到期！\n\n現在下單，確保新濾心準時到貨`,btn:"立即購買濾心"},"3days":{color:"#E74C3C",emoji:"⚠️",title:"濾心到期提醒 - 僅剩3天！",body:`您的【${productName}】只剩 3 天就到期了！\n\n請盡快購買新濾心，確保飲水安全`,btn:"馬上購買濾心"},"today":{color:"#C0392B",emoji:"🚨",title:"今天請更換濾心！",body:`您的【${productName}】今天到期！\n\n請立即更換新濾心，完成後記得重新設定提醒`,btn:"購買原廠濾心"},"overdue":{color:"#922B21",emoji:"❗",title:"濾心已逾期，請盡快更換",body:`您的【${productName}】已超過更換日期！\n\n逾期使用可能影響水質，請儘快購買更換`,btn:"立即補購濾心"}};const c=configs[type]||configs["3days"];return{type:"flex",altText:`${c.emoji} ${c.title}｜${productName}`,contents:{type:"bubble",size:"mega",header:{type:"box",layout:"vertical",contents:[{type:"text",text:c.emoji+" "+c.title,weight:"bold",size:"md",color:"#FFFFFF",wrap:true}],backgroundColor:c.color,paddingAll:"16px"},body:{type:"box",layout:"vertical",contents:[{type:"text",text:c.body,wrap:true,size:"sm",color:"#333333"},{type:"separator",margin:"lg"},{type:"box",layout:"horizontal",margin:"lg",contents:[{type:"text",text:"濾心型號",size:"xs",color:"#888888",flex:2},{type:"text",text:productName,size:"xs",color:"#333333",flex:4,weight:"bold",wrap:true}]},{type:"box",layout:"horizontal",margin:"sm",contents:[{type:"text",text:"到期日",size:"xs",color:"#888888",flex:2},{type:"text",text:nextDate||"",size:"xs",color:"#333333",flex:4}]}],paddingAll:"16px"},footer:{type:"box",layout:"vertical",spacing:"sm",contents:[{type:"button",style:"primary",color:"#1976D2",action:{type:"uri",label:"🛒 "+c.btn,uri:SHOP_URL},height:"sm"},{type:"button",style:"secondary",action:{type:"uri",label:"⚙️ 重新設定提醒",uri:"https://liff.line.me/2009728428-SfuyDoV1?tab=r"},height:"sm"},{type:"button",style:"secondary",action:{type:"uri",label:"💬 聯絡客服 @kida888",uri:LINE_ID},height:"sm"}],paddingAll:"12px"}}}}
+function buildFilterMsg(productName,type,nextDate){const configs={"7days":{color:"#E67E22",emoji:"⏰",title:"濾心即將到期 - 7天後",body:`您的【${productName}】還有 7 天到期！\n\n現在下單，確保新濾心準時到貨`,btn:"立即購買濾心"},"3days":{color:"#E74C3C",emoji:"⚠️",title:"濾心到期提醒 - 僅剩3天！",body:`您的【${productName}】只剩 3 天就到期了！\n\n請盡快購買新濾心，確保飲水安全`,btn:"馬上購買濾心"},"today":{color:"#C0392B",emoji:"🚨",title:"今天請更換濾心！",body:`您的【${productName}】今天到期！\n\n請立即更換新濾心，完成後記得重新設定提醒`,btn:"購買原廠濾心"},"overdue":{color:"#922B21",emoji:"❗",title:"濾心已逾期，請盡快更換",body:`您的【${productName}】已超過更換日期！\n\n逾期使用可能影響水質，請儘快購買更換`,btn:"立即補購濾心"}};const c=configs[type]||configs["3days"];return{type:"flex",altText:`${c.emoji} ${c.title}＜${productName}`,contents:{type:"bubble",size:"mega",header:{type:"box",layout:"vertical",contents:[{type:"text",text:c.emoji+" "+c.title,weight:"bold",size:"md",color:"#FFFFFF",wrap:true}],backgroundColor:c.color,paddingAll:"16px"},body:{type:"box",layout:"vertical",contents:[{type:"text",text:c.body,wrap:true,size:"sm",color:"#333333"},{type:"separator",margin:"lg"},{type:"box",layout:"horizontal",margin:"lg",contents:[{type:"text",text:"濾心型號",size:"xs",color:"#888888",flex:2},{type:"text",text:productName,size:"xs",color:"#333333",flex:4,weight:"bold",wrap:true}]},{type:"box",layout:"horizontal",margin:"sm",contents:[{type:"text",text:"到期日",size:"xs",color:"#888888",flex:2},{type:"text",text:nextDate||"",size:"xs",color:"#333333",flex:4}]}],paddingAll:"16px"},footer:{type:"box",layout:"vertical",spacing:"sm",contents:[{type:"button",style:"primary",color:"#1976D2",action:{type:"uri",label:"🛒 "+c.btn,uri:SHOP_URL},height:"sm"},{type:"button",style:"secondary",action:{type:"uri",label:"⚙️ 重新設定提醒",uri:"https://liff.line.me/2009728428-SfuyDoV1?tab=r"},height:"sm"},{type:"button",style:"secondary",action:{type:"uri",label:"💬 聯絡客服 @kida888",uri:LINE_ID},height:"sm"}],paddingAll:"12px"}}}}
 async function sendMsg(userId,productName,type,nextDate){try{const token=await getLineToken();await axios.post(LINE_API,{to:userId,messages:[buildFilterMsg(productName,type,nextDate)]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});console.log("推播成功 ["+type+"]:"+userId.substring(0,10));return true;}catch(e){console.error("推播失敗 ["+userId.substring(0,10)+"] "+JSON.stringify(e.response?.data||e.message));return false;}}
 function daysDiff(d){const t=new Date,g=new Date(d);t.setHours(0,0,0,0);g.setHours(0,0,0,0);return Math.round((g-t)/86400000)}
 async function runFilterReminders(){try{const rows=await dbGet("reminders","?notified=eq.0");let sent=0;for(const r of rows){const d=daysDiff(r.nextDate);const name=r.productName||"可菱水濾心";if(d===7){if(await sendMsg(r.userId,name,"7days",r.nextDate))sent++;}if(d===3){if(await sendMsg(r.userId,name,"3days",r.nextDate))sent++;}if(d===0){if(await sendMsg(r.userId,name,"today",r.nextDate)){await dbPatch("reminders","?userId=eq."+r.userId,{notified:1});sent++;}}if(d===-1){if(await sendMsg(r.userId,name,"overdue",r.nextDate)){await dbPatch("reminders","?userId=eq."+r.userId,{notified:1});sent++;}}}console.log("濾心提醒完成 共"+rows.length+"筆 成功"+sent+"則");return{total:rows.length,sent};}catch(e){throw e}}
@@ -52,24 +52,26 @@ async function sendCouponPush(toUserId, reg){
   const msgText=["KIDA 吉達興居家生活","","感謝您登錄產品保固！","您的專屬 95 折濾心換購券已發放 🎉","","券號："+reg.couponToken,"折扣：95 折","有效期限："+reg.couponExpireDate,"","憑此券號至各門市購買原廠濾心享 95 折優惠","","點擊查看優惠券：","https://liff.line.me/2009728428-I07Nl5fZ"].join("\n");
   await axios.post(LINE_API,{to:toUserId,messages:[{type:"text",text:msgText}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
 }
-async function runWarrantyReminders(){try{const rows=await dbGet("registrations","");let sent=0;for(const r of rows){const d=daysDiff(r.warrantyEnd);if(d===30||d===7){try{const token=await getLineToken();await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:"📋【保固到期提醒】\n\n您的【"+r.productName+"】保固到期日："+r.warrantyEnd+"（還有 "+d+" 天）\n\n如有任何問題請聯繫我們！\n📞 02-2756-5899"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});sent++;}catch(e){console.error("保固提醒失敗",e.response?.data)}}}return{total:rows.length,sent};}catch(e){throw e}}
+async function runWarrantyReminders(){try{const rows=await dbGet("registrations","");let sent=0;for(const r of rows){const d=daysDiff(r.warrantyEnd);if(d===30||d===7){try{const token=await getLineToken();await axios.post(LINE_API,{to:r.userId,messages:[{type:"text",text:,'📋【保固到期提醒】\n\n您的【"+r.productName+"】保固到期日："+r.warrantyEnd+"（還有 "+d+" 天）\n\n如有任何問題請聯繻我們！\n📞 02-2756-5899"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});sent++;}catch(e){console.error("保固提醒失敗",e.response?.data)}}}return{total:rows.length,sent};}catch(e){throw e}}
 // ── 優惠券到期提醒 ──
 async function runCouponReminders(){
   try{
     const rows=await dbGet("registrations","?couponStatus=eq.issued");
     let sent=0;
     for(const r of rows){
-      if(!r.messagingUserId||!r.couponExpireDate)continue;
+      if(!r.couponExpireDate)continue;
+      const pushTo=r.messagingUserId||r.userId;
+      if(!pushTo)continue;
       const d=daysDiff(r.couponExpireDate);
       if(d===7||d===3||d===0){
         try{
           const token=await getLineToken();
           const dayMsg=d===0?"今天是最後一天！":("還有 "+d+" 天到期");
           await axios.post(LINE_API,{
-            to:r.messagingUserId,
+            to:pushTo,
             messages:[{
               type:"text",
-              text:"🎟️【優惠券到期提醒】\n\n您的 KIDA 95 折濾心換購優惠券即將到期！\n\n券號："+r.couponToken+"\n到期日："+r.couponExpireDate+"（"+dayMsg+"）\n\n請盡快前往吉達興百貨專櫃使用 💧\n📞 02-2756-5899"
+              text:"🎟️【優惠券到期提醒】\n\n您的 KIDA 95 折濾心換購優惠券�s��到期！\n\n券號："+r.couponToken+"\n到期日："+r.couponExpireDate+"（"+dayMsg+"）\n\n請盡快前往吉達興百貨專櫃使用 💧\n📞 02-2756-5899"
             }]
           },{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}});
           sent++;
@@ -115,7 +117,6 @@ app.post("/webhook",async(req,res)=>{
               await dbPatch("reminders","?id=eq."+rem.id,{userId:wId});
               console.log("提醒設定配對成功："+rem.userId.substring(0,10)+"→"+wId.substring(0,10));
             }
-            // LINE OA 關鍵字自動回應已處理確認訊息，不重複回覆
           }
         }catch(e){console.error("提醒設定觸發錯誤:",e.message);}
         continue;
@@ -133,10 +134,9 @@ app.post("/webhook",async(req,res)=>{
             await sendCouponPush(wId,reg);
             console.log("LIFF觸發發券成功:",reg.couponToken,"->",wId.substring(0,10));
           }else{
-            // 查無待發券，發通用歡迎訊息
             if(ev.replyToken){
               const token=await getLineToken();
-              await axios.post(LINE_REPLY,{replyToken:ev.replyToken,messages:[{type:"text",text:"感謝您登錄產品保固！\n如有任何問題歡迎聯繫我們 😊"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}).catch(()=>{});
+              await axios.post(LINE_REPLY,{replyToken:ev.replyToken,messages:[{type:"text",text:,'感謝您登錄產品保固！\n如有任何問題歡迎聯繫我們 😊"}]},{headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}}).catch(()=>{});
             }
           }
         }catch(e){console.error("LIFF觸發錯誤:",e.message);}
@@ -158,21 +158,15 @@ app.post("/webhook",async(req,res)=>{
 
     // 3. 濾心提醒 auto-mapping（原有邏輯）
     try{
-      // 查詢此 Messaging API userId 在 reminders 的現有記錄
       const existing=await dbGet("reminders","?userId=eq."+wId);
-      
-      // 查詢 1 小時內新建、userId 不是 wId 的提醒（LIFF userId 建立的新提醒）
       const oneHrAgo=new Date(Date.now()-60*60*1000).toISOString();
       const recentNew=await dbGet("reminders","?notified=eq.0&createdAt=gte."+oneHrAgo+"&userId=neq."+wId+"&order=createdAt.desc");
-      
-      // 把近期 LIFF userId 的提醒全部更新為正確的 Messaging API userId
       if(recentNew&&recentNew.length>0){
         for(const rem of recentNew){
           await dbPatch("reminders","?id=eq."+rem.id,{userId:wId});
           console.log("自動配對成功（新提醒）："+rem.userId.substring(0,10)+"→"+wId.substring(0,10));
         }
       }
-
       if(existing&&existing.length>0){
         console.log("userId 已在 reminders，共"+existing.length+"筆");
         if(eType==="message"&&ev.replyToken&&!recentNew?.length){
@@ -184,7 +178,6 @@ app.post("/webhook",async(req,res)=>{
         continue;
       }
 
-      // 全新用戶：找最近 1 小時內的提醒配對
       const recent=await dbGet("reminders","?notified=eq.0&createdAt=gte."+oneHrAgo+"&order=createdAt.desc&limit=1");
       if(recent&&recent.length>0){
         const oldId=recent[0].userId;
@@ -205,7 +198,7 @@ app.post("/webhook",async(req,res)=>{
 // ===== 結束新增 API =====
 
 
-// ===== 優惠券系統 API =====
+// ===== 優惠券到期提醒 API =====
 const COUPON_MODELS = ['EF103','EF201','EF202','EF203','EF301','EF401',
   'ET101','ET201','EU102','EU103','EU202','EU203','EU301','EU302',
   'ES301','ES201W','ES101',
@@ -242,7 +235,6 @@ app.post('/api/register-product',async(req,res)=>{
       couponStatus:shouldIssueCoupon?'issued':null,
       couponExpireDate,couponSentAt:shouldIssueCoupon?now:null,
     });
-    // 推播由 webhook 處理（解決 Provider userId 不同問題）
     res.json({success:true,
       message:shouldIssueCoupon?'登錄成功！95 折優惠券已發放，請留意 @kida888 的 LINE 通知':'登錄成功！',
       warrantyEnd,couponToken});
